@@ -1,0 +1,20 @@
+<Config>
+  <BindAddress>*</BindAddress>
+  <Port>__PORT__</Port>
+  <SslPort>6868</SslPort>
+  <EnableSsl>False</EnableSsl>
+  <LaunchBrowser>False</LaunchBrowser>
+  <AuthenticationMethod>Forms</AuthenticationMethod>
+  <AuthenticationRequired>Enabled</AuthenticationRequired>
+  <Branch>master</Branch>
+  <LogLevel>info</LogLevel>
+  <SslCertPath></SslCertPath>
+  <SslCertPassword></SslCertPassword>
+  <UrlBase></UrlBase>
+  <InstanceName>Lidarr</InstanceName>
+  <UpdateMechanism>BuiltIn</UpdateMechanism>
+  <!-- Pastas sugeridas após primeiro login:
+       Root folder: __MUSIC_ROOT__/Artistas
+       Downloads:   __DOWNLOADS_DIR__
+  -->
+</Config>

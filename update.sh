@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# update.sh — Atualização dos serviços do Music Server Installer
+set -euo pipefail
+
+INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=common.sh
+source "${INSTALLER_ROOT}/common.sh"
+# shellcheck source=services/plex.sh
+source "${INSTALLER_ROOT}/services/plex.sh"
+# shellcheck source=services/lidarr.sh
+source "${INSTALLER_ROOT}/services/lidarr.sh"
+# shellcheck source=services/prowlarr.sh
+source "${INSTALLER_ROOT}/services/prowlarr.sh"
+# shellcheck source=services/qbittorrent.sh
+source "${INSTALLER_ROOT}/services/qbittorrent.sh"
+
+usage() {
+  cat <<EOF
+Uso: sudo ./update.sh [opções]
+
+Atualiza os serviços previamente instalados pelo install.sh.
+
+Opções:
+  -y, --yes              Confirmar automaticamente
+  --skip-system-update   Não executar apt update/upgrade geral
+  --backup               Fazer backup das configs antes
+  -h, --help             Mostrar esta ajuda
+EOF
+}
+
+DO_BACKUP=false
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -y|--yes) ASSUME_YES=true; shift ;;
+      --skip-system-update) SKIP_SYSTEM_UPDATE=true; shift ;;
+      --backup) DO_BACKUP=true; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "Opção desconhecida: $1" ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+  require_root
+  print_banner
+
+  echo -e "${C_BOLD}Atualização de serviços${C_RESET}"
+  echo
+
+  if ! load_state; then
+    die "Nenhuma instalação encontrada (${STATE_FILE}). Execute ./install.sh primeiro."
+  fi
+
+  detect_os
+
+  echo -e "  Instalado em:  ${INSTALLED_AT:-desconhecido}"
+  echo -e "  Usuário:       ${TARGET_USER}"
+  echo -e "  Biblioteca:    ${MUSIC_ROOT}"
+  echo
+  echo -e "  Serviços a atualizar:"
+  [[ "${INSTALL_PLEX}" == "true" ]]        && echo -e "    ${C_GREEN}✓${C_RESET} Plex"
+  [[ "${INSTALL_LIDARR}" == "true" ]]      && echo -e "    ${C_GREEN}✓${C_RESET} Lidarr"
+  [[ "${INSTALL_PROWLARR}" == "true" ]]    && echo -e "    ${C_GREEN}✓${C_RESET} Prowlarr"
+  [[ "${INSTALL_QBITTORRENT}" == "true" ]] && echo -e "    ${C_GREEN}✓${C_RESET} qBittorrent"
+  echo
+
+  if ! confirm "Continuar com a atualização?"; then
+    die "Atualização cancelada."
+  fi
+
+  if [[ "${DO_BACKUP}" == "true" ]]; then
+    log_step "Backup das configurações"
+    local dest
+    dest="$(backup_configs)"
+    log_ok "Backup em ${dest}"
+  fi
+
+  if [[ "${SKIP_SYSTEM_UPDATE}" != "true" ]]; then
+    log_step "Atualizando índices APT"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+  fi
+
+  if [[ "${INSTALL_PLEX}" == "true" ]]; then
+    update_plex
+  fi
+  if [[ "${INSTALL_QBITTORRENT}" == "true" ]]; then
+    update_qbittorrent
+  fi
+  if [[ "${INSTALL_LIDARR}" == "true" ]]; then
+    update_lidarr
+  fi
+  if [[ "${INSTALL_PROWLARR}" == "true" ]]; then
+    update_prowlarr
+  fi
+
+  # Atualizar versão no estado
+  if [[ -f "${STATE_FILE}" ]]; then
+    sed -i "s|^INSTALLER_VERSION=.*|INSTALLER_VERSION=${INSTALLER_VERSION}|" "${STATE_FILE}"
+    if grep -q '^UPDATED_AT=' "${STATE_FILE}"; then
+      sed -i "s|^UPDATED_AT=.*|UPDATED_AT=$(date -Iseconds)|" "${STATE_FILE}"
+    else
+      echo "UPDATED_AT=$(date -Iseconds)" >> "${STATE_FILE}"
+    fi
+  fi
+
+  echo
+  log_ok "Atualização concluída"
+  local ip
+  ip="$(get_local_ip)"
+  echo
+  [[ "${INSTALL_PLEX}" == "true" ]]        && echo -e "${C_DIM}Plex         http://${ip}:${PORT_PLEX}/web${C_RESET}"
+  [[ "${INSTALL_LIDARR}" == "true" ]]      && echo -e "${C_DIM}Lidarr       http://${ip}:${PORT_LIDARR}${C_RESET}"
+  [[ "${INSTALL_PROWLARR}" == "true" ]]    && echo -e "${C_DIM}Prowlarr     http://${ip}:${PORT_PROWLARR}${C_RESET}"
+  [[ "${INSTALL_QBITTORRENT}" == "true" ]] && echo -e "${C_DIM}qBittorrent  http://${ip}:${PORT_QBITTORRENT}${C_RESET}"
+  echo
+}
+
+main "$@"

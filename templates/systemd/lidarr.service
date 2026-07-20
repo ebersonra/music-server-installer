@@ -1,0 +1,17 @@
+[Unit]
+Description=Lidarr Daemon
+After=network.target
+
+[Service]
+User=@USER@
+Group=@USER@
+UMask=0002
+Type=simple
+ExecStart=/opt/Lidarr/Lidarr -nobrowser -data=@CONFIG@
+TimeoutStopSec=20
+KillMode=process
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
