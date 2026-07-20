@@ -133,7 +133,7 @@ EOF
   chown -R "${TARGET_UID}:${TARGET_GID}" "${MUSIC_ROOT}" 2>/dev/null || true
   if id lidarr &>/dev/null; then
     usermod -aG media lidarr 2>/dev/null || true
-    # Acesso de escrita
+    [[ -n "${TARGET_USER:-}" ]] && usermod -aG "${TARGET_USER}" lidarr 2>/dev/null || true
     setfacl -m u:lidarr:rwX "${MUSIC_ROOT}" 2>/dev/null || true
     setfacl -R -m u:lidarr:rwX "${MUSIC_ROOT}" 2>/dev/null || true
   fi
@@ -161,6 +161,7 @@ install_lidarr() {
 
   _apply_lidarr_config
   service_enable_start lidarr
+  wait_for_port "${PORT_LIDARR}" 45 || log_warn "Lidarr ainda não escuta na porta ${PORT_LIDARR}"
   log_ok "Lidarr instalado na porta ${PORT_LIDARR}"
 }
 

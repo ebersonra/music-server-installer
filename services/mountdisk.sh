@@ -151,15 +151,13 @@ configure_ntfs_mount() {
 
   # Já montado neste ponto?
   if findmnt -n "${MOUNT_POINT}" &>/dev/null; then
-    local current
-    current="$(findmnt -n -o SOURCE "${MOUNT_POINT}" | awk '{print $1}')"
-    # SOURCE pode ser /dev/sdb1 ou UUID=
-    local current_dev
+    local current_dev current_uuid disk_uuid
     current_dev="$(findmnt -n -o SOURCE "${MOUNT_POINT}")"
+    current_uuid="$(findmnt -n -o UUID "${MOUNT_POINT}" 2>/dev/null || true)"
+    disk_uuid="$(blkid -s UUID -o value "${DISK_DEVICE}" 2>/dev/null || true)"
     if [[ "${current_dev}" == "${DISK_DEVICE}" ]] || \
-       [[ "$(findmnt -n -o UUID "${MOUNT_POINT}" 2>/dev/null)" == "$(blkid -s UUID -o value "${DISK_DEVICE}" 2>/dev/null)" ]]; then
+       [[ -n "${current_uuid}" && "${current_uuid}" == "${disk_uuid}" ]]; then
       log_ok "Disco já montado em ${MOUNT_POINT}"
-      # Remount com opções corretas quando NTFS
       case "${DISK_FSTYPE}" in
         ntfs|ntfs3|fuseblk)
           mount -o "remount,${ntfs_opts}" "${MOUNT_POINT}" 2>/dev/null \
@@ -181,7 +179,6 @@ configure_ntfs_mount() {
       if confirm "Desmontar e remontar em ${MOUNT_POINT} com permissões do instalador?"; then
         umount "${existing_mp}" || die "Falha ao desmontar ${existing_mp}"
       else
-        # Reutilizar mount existente (sem tocar fstab de sistema)
         MOUNT_POINT="${existing_mp}"
         MUSIC_ROOT="${MOUNT_POINT}/Musicas"
         log_warn "Reutilizando ${MOUNT_POINT} — fstab NÃO será alterado"
@@ -189,29 +186,27 @@ configure_ntfs_mount() {
       fi
     fi
 
-    if [[ "${MANAGE_FSTAB:-true}" != "false" ]] || ! findmnt -n "${MOUNT_POINT}" &>/dev/null; then
-      if ! findmnt -n "${MOUNT_POINT}" &>/dev/null; then
-        case "${DISK_FSTYPE}" in
-          ntfs|ntfs3|fuseblk)
-            if ! mount -t ntfs-3g -o "${ntfs_opts}" "${DISK_DEVICE}" "${MOUNT_POINT}"; then
-              mount -t ntfs3 -o "uid=${TARGET_UID},gid=${media_gid},umask=002" "${DISK_DEVICE}" "${MOUNT_POINT}" \
-                || die "Falha ao montar ${DISK_DEVICE} em ${MOUNT_POINT}"
-            fi
-            ;;
-          ext4|ext3|xfs|btrfs)
-            mount "${DISK_DEVICE}" "${MOUNT_POINT}" || die "Falha ao montar ${DISK_DEVICE}"
-            chown "${TARGET_UID}:media" "${MOUNT_POINT}" 2>/dev/null || true
-            ;;
-          vfat|exfat)
-            mount -o "uid=${TARGET_UID},gid=${media_gid},umask=002" "${DISK_DEVICE}" "${MOUNT_POINT}" \
-              || die "Falha ao montar ${DISK_DEVICE}"
-            ;;
-          *)
-            mount "${DISK_DEVICE}" "${MOUNT_POINT}" || die "Falha ao montar ${DISK_DEVICE} (fstype=${DISK_FSTYPE})"
-            ;;
-        esac
-        log_ok "Montado ${DISK_DEVICE} → ${MOUNT_POINT}"
-      fi
+    if [[ "${MANAGE_FSTAB:-true}" != "false" ]] && ! findmnt -n "${MOUNT_POINT}" &>/dev/null; then
+      case "${DISK_FSTYPE}" in
+        ntfs|ntfs3|fuseblk)
+          if ! mount -t ntfs-3g -o "${ntfs_opts}" "${DISK_DEVICE}" "${MOUNT_POINT}"; then
+            mount -t ntfs3 -o "uid=${TARGET_UID},gid=${media_gid},umask=002" "${DISK_DEVICE}" "${MOUNT_POINT}" \
+              || die "Falha ao montar ${DISK_DEVICE} em ${MOUNT_POINT}"
+          fi
+          ;;
+        ext4|ext3|xfs|btrfs)
+          mount "${DISK_DEVICE}" "${MOUNT_POINT}" || die "Falha ao montar ${DISK_DEVICE}"
+          chown "${TARGET_UID}:media" "${MOUNT_POINT}" 2>/dev/null || true
+          ;;
+        vfat|exfat)
+          mount -o "uid=${TARGET_UID},gid=${media_gid},umask=002" "${DISK_DEVICE}" "${MOUNT_POINT}" \
+            || die "Falha ao montar ${DISK_DEVICE}"
+          ;;
+        *)
+          mount "${DISK_DEVICE}" "${MOUNT_POINT}" || die "Falha ao montar ${DISK_DEVICE} (fstype=${DISK_FSTYPE})"
+          ;;
+      esac
+      log_ok "Montado ${DISK_DEVICE} → ${MOUNT_POINT}"
     fi
   fi
 

@@ -98,14 +98,36 @@ main() {
     update_prowlarr
   fi
 
-  # Atualizar versão no estado
+  # Atualizar versão no estado (valores com quoting seguro)
   if [[ -f "${STATE_FILE}" ]]; then
-    sed -i "s|^INSTALLER_VERSION=.*|INSTALLER_VERSION=${INSTALLER_VERSION}|" "${STATE_FILE}"
-    if grep -q '^UPDATED_AT=' "${STATE_FILE}"; then
-      sed -i "s|^UPDATED_AT=.*|UPDATED_AT=$(date -Iseconds)|" "${STATE_FILE}"
-    else
-      echo "UPDATED_AT=$(date -Iseconds)" >> "${STATE_FILE}"
-    fi
+    local tmp_state
+    tmp_state="$(mktemp)"
+    # shellcheck source=/dev/null
+    source "${STATE_FILE}"
+    INSTALLER_VERSION="${INSTALLER_VERSION}"
+    {
+      printf 'INSTALLER_VERSION=%q\n' "${INSTALLER_VERSION}"
+      printf 'INSTALLED_AT=%q\n' "${INSTALLED_AT:-}"
+      printf 'UPDATED_AT=%q\n' "$(date -Iseconds)"
+      printf 'TARGET_USER=%q\n' "${TARGET_USER}"
+      printf 'TARGET_UID=%q\n' "${TARGET_UID}"
+      printf 'TARGET_GID=%q\n' "${TARGET_GID}"
+      printf 'TARGET_HOME=%q\n' "${TARGET_HOME}"
+      printf 'DISK_DEVICE=%q\n' "${DISK_DEVICE}"
+      printf 'DISK_LABEL=%q\n' "${DISK_LABEL}"
+      printf 'DISK_FSTYPE=%q\n' "${DISK_FSTYPE}"
+      printf 'MOUNT_POINT=%q\n' "${MOUNT_POINT}"
+      printf 'MUSIC_ROOT=%q\n' "${MUSIC_ROOT}"
+      printf 'DOWNLOADS_DIR=%q\n' "${DOWNLOADS_DIR}"
+      printf 'INCOMPLETE_DIR=%q\n' "${INCOMPLETE_DIR}"
+      printf 'PLEX_LIBRARY_NAME=%q\n' "${PLEX_LIBRARY_NAME}"
+      printf 'INSTALL_PLEX=%q\n' "${INSTALL_PLEX}"
+      printf 'INSTALL_LIDARR=%q\n' "${INSTALL_LIDARR}"
+      printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"
+      printf 'INSTALL_QBITTORRENT=%q\n' "${INSTALL_QBITTORRENT}"
+    } > "${tmp_state}"
+    mv "${tmp_state}" "${STATE_FILE}"
+    chmod 600 "${STATE_FILE}"
   fi
 
   echo

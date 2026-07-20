@@ -10,12 +10,11 @@ configure_firewall() {
     return 0
   fi
 
-  # Garantir SSH antes de habilitar UFW (evitar lockout)
+  # Garantir SSH antes de qualquer enable (evitar lockout)
   ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
 
   if [[ "${INSTALL_PLEX}" == "true" ]]; then
     ufw allow "${PORT_PLEX}/tcp" comment "Plex Media Server" >/dev/null 2>&1 || true
-    # Portas extras do Plex (GDM, DLNA opcional)
     ufw allow 3005/tcp comment "Plex Companion" >/dev/null 2>&1 || true
     ufw allow 8324/tcp comment "Plex Roku" >/dev/null 2>&1 || true
     ufw allow 32469/tcp comment "Plex DLNA" >/dev/null 2>&1 || true
@@ -31,20 +30,19 @@ configure_firewall() {
 
   if [[ "${INSTALL_QBITTORRENT}" == "true" ]]; then
     ufw allow "${PORT_QBITTORRENT}/tcp" comment "qBittorrent WebUI" >/dev/null 2>&1 || true
-    # Faixa BT padrão
     ufw allow 6881:6891/tcp comment "qBittorrent BT" >/dev/null 2>&1 || true
     ufw allow 6881:6891/udp comment "qBittorrent BT UDP" >/dev/null 2>&1 || true
   fi
 
-  # Habilitar UFW se ainda inativo (não forçar se usuário desabilitou de propósito)
   local status
   status="$(ufw status 2>/dev/null | head -1 || true)"
   if echo "${status}" | grep -qi "inactive"; then
-    log_info "Ativando UFW..."
-    ufw --force enable >/dev/null 2>&1 || log_warn "Não foi possível ativar o UFW automaticamente"
+    log_warn "UFW está inativo. Regras foram adicionadas, mas o firewall NÃO foi ativado automaticamente"
+    log_warn "Se o SSH não estiver na porta 22/OpenSSH, ative o UFW manualmente com cuidado: sudo ufw enable"
+  else
+    log_ok "Portas configuradas no firewall (UFW ativo)"
   fi
 
-  log_ok "Portas configuradas no firewall"
   ufw status numbered 2>/dev/null | head -30 || true
 }
 

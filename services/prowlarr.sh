@@ -90,6 +90,7 @@ EOF
 
   if id prowlarr &>/dev/null; then
     usermod -aG media prowlarr 2>/dev/null || true
+    [[ -n "${TARGET_USER:-}" ]] && usermod -aG "${TARGET_USER}" prowlarr 2>/dev/null || true
   fi
 }
 
@@ -115,6 +116,7 @@ install_prowlarr() {
 
   _apply_prowlarr_config
   service_enable_start prowlarr
+  wait_for_port "${PORT_PROWLARR}" 45 || log_warn "Prowlarr ainda não escuta na porta ${PORT_PROWLARR}"
   log_ok "Prowlarr instalado na porta ${PORT_PROWLARR}"
 }
 

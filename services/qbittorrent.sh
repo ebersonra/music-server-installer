@@ -78,9 +78,17 @@ WantedBy=multi-user.target
 EOF
   fi
 
-  # Aceitar EULA via LegalNotice (já no conf); também variável de ambiente em versões novas
+  # Aceitar EULA via LegalNotice (já no conf)
   mkdir -p "${DOWNLOADS_DIR}" "${INCOMPLETE_DIR}"
-  chown -R "${TARGET_UID}:${TARGET_GID}" "${MUSIC_ROOT}"
+  case "${DISK_FSTYPE:-}" in
+    ntfs|ntfs3|fuseblk|vfat|exfat)
+      log_info "Pulando chown em ${MUSIC_ROOT} (filesystem ${DISK_FSTYPE})"
+      ;;
+    *)
+      chown -R "${TARGET_UID}:${TARGET_GID}" "${MUSIC_ROOT}" 2>/dev/null \
+        || log_warn "chown em ${MUSIC_ROOT} falhou"
+      ;;
+  esac
 
   systemctl daemon-reload
   systemctl enable "qbittorrent-nox@${TARGET_USER}" >/dev/null 2>&1 || true
@@ -88,6 +96,7 @@ EOF
 
   if systemctl is-active --quiet "qbittorrent-nox@${TARGET_USER}"; then
     log_ok "qBittorrent ativo (WebUI porta ${PORT_QBITTORRENT})"
+    wait_for_port "${PORT_QBITTORRENT}" 30 || log_warn "WebUI ainda não escuta na porta ${PORT_QBITTORRENT}"
     # Versões recentes geram senha temporária no journal
     local tmp_pass
     tmp_pass="$(journalctl -u "qbittorrent-nox@${TARGET_USER}" -n 80 --no-pager 2>/dev/null \
@@ -95,6 +104,7 @@ EOF
       | awk '{print $1}' | tail -1 || true)"
     if [[ -n "${tmp_pass}" ]]; then
       log_info "Senha temporária do WebUI: ${tmp_pass} (usuário: admin)"
+      mkdir -p "${STATE_DIR}"
       echo "${tmp_pass}" > "${STATE_DIR}/qbittorrent-temp-password.txt"
       chmod 600 "${STATE_DIR}/qbittorrent-temp-password.txt"
     else
