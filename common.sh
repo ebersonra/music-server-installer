@@ -206,132 +206,305 @@ select_user() {
 # Detecção de discos
 # -----------------------------------------------------------------------------
 # Preenche arrays: DISK_DEVICES[], DISK_LABELS[], DISK_FSTYPES[], DISK_SIZES[], DISK_MOUNTS[]
+#                  DISK_TRAN[] (usb/sata/mmc/…), DISK_HOTPLUG[] (0|1)
+
+# Extrai valor de saída pairs do lsblk: KEY="value"
+# Importante: não usar sed com .*KEY= — PKNAME= contém o sufixo NAME= e corrompe o parse.
+_lsblk_pair_value() {
+  local line="$1" key="$2"
+  if [[ "${line}" =~ (^|[[:space:]])${key}=\"([^\"]*)\" ]]; then
+    printf '%s\n' "${BASH_REMATCH[2]}"
+  fi
+}
+
+# Complementa FSTYPE/LABEL quando o lsblk vem vazio (comum em NTFS/USB)
+probe_fs_info() {
+  local device="$1"
+  local fstype="${2:-}"
+  local label="${3:-}"
+  local out_fstype out_label
+  out_fstype="${fstype}"
+  out_label="${label}"
+
+  if [[ -z "${out_fstype}" || -z "${out_label}" ]]; then
+    local blkid_out
+    blkid_out="$(blkid -o export "${device}" 2>/dev/null || true)"
+    if [[ -n "${blkid_out}" ]]; then
+      if [[ -z "${out_fstype}" ]]; then
+        out_fstype="$(printf '%s\n' "${blkid_out}" | sed -n 's/^TYPE=//p' | head -n1)"
+      fi
+      if [[ -z "${out_label}" ]]; then
+        out_label="$(printf '%s\n' "${blkid_out}" | sed -n 's/^LABEL=//p' | head -n1)"
+      fi
+    fi
+  fi
+
+  if [[ -z "${out_fstype}" || -z "${out_label}" ]]; then
+    local udev_out
+    udev_out="$(udevadm info --query=property --name="${device}" 2>/dev/null || true)"
+    if [[ -n "${udev_out}" ]]; then
+      if [[ -z "${out_fstype}" ]]; then
+        out_fstype="$(printf '%s\n' "${udev_out}" | sed -n 's/^ID_FS_TYPE=//p' | head -n1)"
+      fi
+      if [[ -z "${out_label}" ]]; then
+        out_label="$(printf '%s\n' "${udev_out}" | sed -n 's/^ID_FS_LABEL=//p' | head -n1)"
+        if [[ -z "${out_label}" ]]; then
+          local model vendor
+          vendor="$(printf '%s\n' "${udev_out}" | sed -n 's/^ID_USB_VENDOR=//p' | head -n1)"
+          model="$(printf '%s\n' "${udev_out}" | sed -n 's/^ID_USB_MODEL=//p' | head -n1)"
+          [[ -z "${model}" ]] && model="$(printf '%s\n' "${udev_out}" | sed -n 's/^ID_MODEL=//p' | head -n1)"
+          if [[ -n "${vendor}" || -n "${model}" ]]; then
+            out_label="$(echo "${vendor} ${model}" | sed 's/_/ /g; s/  */ /g; s/^ //; s/ $//')"
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  # Mount ativo pode reportar fuseblk para NTFS
+  if [[ -z "${out_fstype}" ]]; then
+    local mounted_fs
+    mounted_fs="$(findmnt -n -o FSTYPE "${device}" 2>/dev/null || true)"
+    [[ -n "${mounted_fs}" ]] && out_fstype="${mounted_fs}"
+  fi
+
+  printf '%s\t%s\n' "${out_fstype}" "${out_label}"
+}
+
+is_system_mountpoint() {
+  local mp="$1"
+  [[ -z "${mp}" || "${mp}" == "-" ]] && return 1
+  case "${mp}" in
+    /|/boot|/boot/efi|/efi|/home|/var|/usr|/etc|/opt|/root|/tmp|/srv|/snap)
+      return 0
+      ;;
+    \[SWAP\]|\[SWAP*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+is_usable_data_fstype() {
+  local fstype="$1"
+  case "${fstype}" in
+    ntfs|ntfs3|fuseblk|ext4|ext3|ext2|xfs|btrfs|exfat|vfat|fat|fat32|hfsplus)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Montagem atual do device (pode diferir do campo MOUNTPOINT do lsblk)
+resolve_mountpoint() {
+  local device="$1"
+  local mp="${2:-}"
+  if [[ -n "${mp}" && "${mp}" != "-" ]]; then
+    printf '%s\n' "${mp}"
+    return 0
+  fi
+  findmnt -n -o TARGET "${device}" 2>/dev/null | head -n1 || true
+}
+
 detect_disks() {
   DISK_DEVICES=()
   DISK_LABELS=()
   DISK_FSTYPES=()
   DISK_SIZES=()
   DISK_MOUNTS=()
+  DISK_TRAN=()
+  DISK_HOTPLUG=()
 
-  local name fstype size label mountpoint
+  local name fstype size label mountpoint type tran hotplug pkname
+  local probed_fstype probed_label display_label resolved_mp
+  # Mapa TRAN do disco-pai (partições frequentemente vêm com TRAN vazio)
+  local -A parent_tran=()
 
-  # -P: NAME="..." FSTYPE="..." (labels com espaços seguros)
-  # Extraímos com sed em vez de eval
+  # Ubuntu 24.04 / util-linux: -l e -P são mutuamente exclusivos.
+  # Usar -Pnp (pairs + paths absolutos), sem -l.
+  local lsblk_out=""
+  if ! lsblk_out="$(lsblk -Pnp -o NAME,FSTYPE,SIZE,LABEL,MOUNTPOINT,TYPE,TRAN,HOTPLUG,PKNAME 2>/dev/null)"; then
+    lsblk_out="$(lsblk -Pn -o NAME,FSTYPE,SIZE,LABEL,MOUNTPOINT,TYPE,TRAN,HOTPLUG,PKNAME 2>/dev/null || true)"
+  fi
+
+  # 1ª passagem: TRAN dos discos-pai
   while IFS= read -r line; do
     [[ -z "${line}" ]] && continue
-    name="$(printf '%s\n' "${line}" | sed -n 's/.*NAME="\([^"]*\)".*/\1/p')"
-    fstype="$(printf '%s\n' "${line}" | sed -n 's/.*FSTYPE="\([^"]*\)".*/\1/p')"
-    size="$(printf '%s\n' "${line}" | sed -n 's/.*SIZE="\([^"]*\)".*/\1/p')"
-    label="$(printf '%s\n' "${line}" | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p')"
-    mountpoint="$(printf '%s\n' "${line}" | sed -n 's/.*MOUNTPOINT="\([^"]*\)".*/\1/p')"
+    name="$(_lsblk_pair_value "${line}" NAME)"
+    type="$(_lsblk_pair_value "${line}" TYPE)"
+    tran="$(_lsblk_pair_value "${line}" TRAN)"
+    [[ "${type}" == "disk" && -n "${name}" && -n "${tran}" ]] && parent_tran["${name}"]="${tran}"
+  done <<< "${lsblk_out}"
 
-    [[ -z "${name}" || -z "${fstype}" ]] && continue
-    [[ "${name}" =~ ^/dev/(loop|ram|sr|fd) ]] && continue
-    [[ "${fstype}" == "iso9660" || "${fstype}" == "squashfs" ]] && continue
-    [[ "${mountpoint}" == "/" || "${mountpoint}" == "/boot" || "${mountpoint}" == "/boot/efi" ]] && continue
+  # 2ª passagem: candidatos (partições / discos com FS)
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    name="$(_lsblk_pair_value "${line}" NAME)"
+    fstype="$(_lsblk_pair_value "${line}" FSTYPE)"
+    size="$(_lsblk_pair_value "${line}" SIZE)"
+    label="$(_lsblk_pair_value "${line}" LABEL)"
+    mountpoint="$(_lsblk_pair_value "${line}" MOUNTPOINT)"
+    type="$(_lsblk_pair_value "${line}" TYPE)"
+    tran="$(_lsblk_pair_value "${line}" TRAN)"
+    hotplug="$(_lsblk_pair_value "${line}" HOTPLUG)"
+    pkname="$(_lsblk_pair_value "${line}" PKNAME)"
+
+    [[ -z "${name}" ]] && continue
+    [[ "${name}" =~ ^/dev/(loop|ram|sr|fd|zram) ]] && continue
+    [[ "${type}" != "part" && "${type}" != "disk" ]] && continue
+
+    # Disco inteiro só entra se tiver filesystem (sem tabela de partição)
+    if [[ "${type}" == "disk" ]]; then
+      # se tem partições filhas no mesmo dump, pular o disco “nu”
+      if printf '%s\n' "${lsblk_out}" | grep -q "PKNAME=\"${name}\""; then
+        continue
+      fi
+    fi
+
+    # Herdar TRAN do pai (USB externo costuma vir só no disco)
+    if [[ -z "${tran}" && -n "${pkname}" ]]; then
+      local parent="/dev/${pkname##*/}"
+      [[ -n "${parent_tran[$parent]:-}" ]] && tran="${parent_tran[$parent]}"
+      [[ -z "${tran}" && -n "${parent_tran[$pkname]:-}" ]] && tran="${parent_tran[$pkname]}"
+    fi
+
+    IFS=$'\t' read -r probed_fstype probed_label < <(probe_fs_info "${name}" "${fstype}" "${label}")
+    fstype="${probed_fstype}"
+    label="${probed_label}"
+
+    [[ -z "${fstype}" ]] && continue
+    [[ "${fstype}" == "iso9660" || "${fstype}" == "squashfs" || "${fstype}" == "swap" ]] && continue
+    if ! is_usable_data_fstype "${fstype}"; then
+      continue
+    fi
+
+    resolved_mp="$(resolve_mountpoint "${name}" "${mountpoint}")"
+    if is_system_mountpoint "${resolved_mp}"; then
+      continue
+    fi
+
+    if [[ -n "${label}" ]]; then
+      display_label="${label}"
+    elif [[ -n "${tran}" ]]; then
+      display_label="$(basename "${name}") (${tran})"
+    else
+      display_label="$(basename "${name}")"
+    fi
 
     DISK_DEVICES+=("${name}")
     DISK_FSTYPES+=("${fstype}")
     DISK_SIZES+=("${size:-?}")
-    if [[ -z "${label}" ]]; then
-      DISK_LABELS+=("$(basename "${name}")")
-    else
-      DISK_LABELS+=("${label}")
+    DISK_LABELS+=("${display_label}")
+    DISK_MOUNTS+=("${resolved_mp:--}")
+    DISK_TRAN+=("${tran:-}")
+    DISK_HOTPLUG+=("${hotplug:-0}")
+  done <<< "${lsblk_out}"
+
+  # Incluir volumes NTFS/fuseblk já montados que o lsblk possa ter omitido
+  local src mp fs
+  while IFS=$'\t' read -r src fs mp; do
+    [[ -z "${src}" || -z "${mp}" ]] && continue
+    [[ "${src}" =~ ^/dev/ ]] || continue
+    [[ -b "${src}" ]] || continue
+    is_system_mountpoint "${mp}" && continue
+    is_usable_data_fstype "${fs}" || continue
+
+    local already=false
+    local d
+    for d in "${DISK_DEVICES[@]:-}"; do
+      [[ "${d}" == "${src}" ]] && already=true && break
+    done
+    [[ "${already}" == "true" ]] && continue
+
+    IFS=$'\t' read -r probed_fstype probed_label < <(probe_fs_info "${src}" "${fs}" "")
+    size="$(lsblk -n -o SIZE "${src}" 2>/dev/null | head -n1 | tr -d ' ' || echo '?')"
+    display_label="${probed_label:-$(basename "${src}")}"
+    local fb_tran fb_hot
+    fb_tran="$(lsblk -n -o TRAN "${src}" 2>/dev/null | head -n1 | tr -d ' ' || true)"
+    if [[ -z "${fb_tran}" ]]; then
+      local fb_pk
+      fb_pk="$(lsblk -n -o PKNAME "${src}" 2>/dev/null | head -n1 | tr -d ' ' || true)"
+      [[ -n "${fb_pk}" ]] && fb_tran="$(lsblk -n -o TRAN "/dev/${fb_pk##*/}" 2>/dev/null | head -n1 | tr -d ' ' || true)"
     fi
-    DISK_MOUNTS+=("${mountpoint:--}")
-  done < <(lsblk -lnpP -o NAME,FSTYPE,SIZE,LABEL,MOUNTPOINT 2>/dev/null)
+    fb_hot="$(lsblk -n -o HOTPLUG "${src}" 2>/dev/null | head -n1 | tr -d ' ' || echo 0)"
+
+    DISK_DEVICES+=("${src}")
+    DISK_FSTYPES+=("${probed_fstype:-$fs}")
+    DISK_SIZES+=("${size:-?}")
+    DISK_LABELS+=("${display_label}")
+    DISK_MOUNTS+=("${mp}")
+    DISK_TRAN+=("${fb_tran:-}")
+    DISK_HOTPLUG+=("${fb_hot:-0}")
+  done < <(findmnt -n -t ntfs,ntfs3,fuseblk,exfat,vfat -o SOURCE,FSTYPE,TARGET --pairs 2>/dev/null | while IFS= read -r mline; do
+      local msrc mfs mtarget
+      msrc="$(_lsblk_pair_value "${mline}" SOURCE)"
+      mfs="$(_lsblk_pair_value "${mline}" FSTYPE)"
+      mtarget="$(_lsblk_pair_value "${mline}" TARGET)"
+      printf '%s\t%s\t%s\n' "${msrc}" "${mfs}" "${mtarget}"
+    done || true)
+
+  # Priorizar USB / hotplug na listagem
+  if [[ ${#DISK_DEVICES[@]} -gt 1 ]]; then
+    local -a ord=()
+    local i
+    for i in "${!DISK_DEVICES[@]}"; do
+      if [[ "${DISK_TRAN[$i]}" == "usb" || "${DISK_HOTPLUG[$i]}" == "1" ]]; then
+        ord+=("$i")
+      fi
+    done
+    for i in "${!DISK_DEVICES[@]}"; do
+      if [[ "${DISK_TRAN[$i]}" != "usb" && "${DISK_HOTPLUG[$i]}" != "1" ]]; then
+        ord+=("$i")
+      fi
+    done
+    local -a _dev=() _lab=() _fs=() _sz=() _mp=() _tr=() _hp=()
+    for i in "${ord[@]}"; do
+      _dev+=("${DISK_DEVICES[$i]}")
+      _lab+=("${DISK_LABELS[$i]}")
+      _fs+=("${DISK_FSTYPES[$i]}")
+      _sz+=("${DISK_SIZES[$i]}")
+      _mp+=("${DISK_MOUNTS[$i]}")
+      _tr+=("${DISK_TRAN[$i]}")
+      _hp+=("${DISK_HOTPLUG[$i]}")
+    done
+    DISK_DEVICES=("${_dev[@]}")
+    DISK_LABELS=("${_lab[@]}")
+    DISK_FSTYPES=("${_fs[@]}")
+    DISK_SIZES=("${_sz[@]}")
+    DISK_MOUNTS=("${_mp[@]}")
+    DISK_TRAN=("${_tr[@]}")
+    DISK_HOTPLUG=("${_hp[@]}")
+  fi
 }
 
-select_disk() {
-  detect_disks
-
-  echo -e "${C_BOLD}Detectando discos...${C_RESET}"
-  echo
-
-  if [[ ${#DISK_DEVICES[@]} -eq 0 ]]; then
-    log_warn "Nenhuma partição secundária detectada."
-    echo
-    echo "Opções:"
-    echo "  [1] Usar caminho local (ex.: /home/${SUDO_USER:-user}/Musicas)"
-    echo "  [2] Cancelar"
-    echo
-    local choice
-    choice="$(prompt_input "Escolha" "1")"
-    if [[ "${choice}" != "1" ]]; then
-      die "Instalação cancelada."
-    fi
-    local custom
-    local default_music="/home/${SUDO_USER:-$(logname 2>/dev/null || echo user)}/Musicas"
-    custom="$(prompt_input "Caminho para a biblioteca de músicas" "${default_music}")"
-    MOUNT_POINT="$(dirname "${custom}")"
-    MUSIC_ROOT="${custom}"
-    DISK_DEVICE="local"
-    DISK_LABEL="local"
-    DISK_FSTYPE="local"
-    DISK_SIZE="-"
-    return 0
-  fi
-
-  local i
-  for i in "${!DISK_DEVICES[@]}"; do
-    local mp_info=""
-    if [[ "${DISK_MOUNTS[$i]}" != "-" ]]; then
-      mp_info=" → ${DISK_MOUNTS[$i]}"
-    fi
-    echo -e "  [$((i + 1))] ${C_BOLD}${DISK_LABELS[$i]}${C_RESET} (${DISK_FSTYPES[$i]}) - ${DISK_SIZES[$i]}${C_DIM}${mp_info}${C_RESET}"
-  done
-  echo
-  echo "  [0] Usar caminho local (sem montar disco externo)"
-  echo
-
-  local choice
-  choice="$(prompt_input "Escolha o disco" "1")"
-
-  if [[ "${choice}" == "0" ]]; then
-    local custom
-    local default_music="/home/${SUDO_USER:-$(logname 2>/dev/null || echo user)}/Musicas"
-    custom="$(prompt_input "Caminho para a biblioteca de músicas" "${default_music}")"
-    MUSIC_ROOT="${custom}"
-    MOUNT_POINT="$(dirname "${custom}")"
-    DISK_DEVICE="local"
-    DISK_LABEL="local"
-    DISK_FSTYPE="local"
-    DISK_SIZE="-"
-    return 0
-  fi
-
-  if ! [[ "${choice}" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#DISK_DEVICES[@]} )); then
-    die "Opção de disco inválida."
-  fi
-
-  local idx=$((choice - 1))
+_apply_selected_disk() {
+  local idx="$1"
   DISK_DEVICE="${DISK_DEVICES[$idx]}"
   DISK_LABEL="${DISK_LABELS[$idx]}"
   DISK_FSTYPE="${DISK_FSTYPES[$idx]}"
   DISK_SIZE="${DISK_SIZES[$idx]}"
 
-  # Se já montado, validar / oferecer remount canônico
-  if [[ "${DISK_MOUNTS[$idx]}" != "-" ]]; then
+  if [[ "${DISK_MOUNTS[$idx]}" != "-" && -n "${DISK_MOUNTS[$idx]}" ]]; then
     local current_mp="${DISK_MOUNTS[$idx]}"
     if declare -f is_critical_mount_point >/dev/null && is_critical_mount_point "${current_mp}"; then
       die "Disco montado em path crítico (${current_mp}). Escolha outro disco ou desmonte antes."
     fi
-    # Mounts do desktop (/media/...) são frágeis no boot — preferir /mnt/musicas
     if [[ "${current_mp}" == /media/* ]]; then
       log_warn "Disco montado pelo desktop em ${current_mp}"
       if confirm "Remontar em /mnt/musicas com permissões do instalador?"; then
         MOUNT_POINT="/mnt/musicas"
-        # configure_ntfs_mount fará umount + mount
       else
         MOUNT_POINT="${current_mp}"
-        log_warn "Reutilizando ${MOUNT_POINT} (fstab pode não ser gerenciado)"
+        MANAGE_FSTAB=false
+        log_warn "Reutilizando ${MOUNT_POINT} — fstab NÃO será gerenciado"
       fi
     else
       MOUNT_POINT="${current_mp}"
       log_ok "Disco já montado em ${MOUNT_POINT}"
     fi
     if declare -f validate_mount_point >/dev/null; then
-      # /media/... pode passar se não estiver na lista crítica; fstab cuidará
       if [[ "${MOUNT_POINT}" != /media/* ]]; then
         validate_mount_point "${MOUNT_POINT}"
       fi
@@ -343,8 +516,113 @@ select_disk() {
     fi
   fi
 
+  if [[ "${MOUNT_POINT}" == /media/* ]]; then
+    MANAGE_FSTAB=false
+  fi
+
   MUSIC_ROOT="${MOUNT_POINT}/Musicas"
   log_ok "Disco selecionado: ${DISK_LABEL} (${DISK_DEVICE}, ${DISK_FSTYPE}, ${DISK_SIZE})"
+}
+
+_select_local_music_path() {
+  local custom
+  local default_music="/home/${SUDO_USER:-$(logname 2>/dev/null || echo user)}/Musicas"
+  custom="$(prompt_input "Caminho para a biblioteca de músicas" "${default_music}")"
+  MUSIC_ROOT="${custom}"
+  MOUNT_POINT="$(dirname "${custom}")"
+  DISK_DEVICE="local"
+  DISK_LABEL="local"
+  DISK_FSTYPE="local"
+  DISK_SIZE="-"
+}
+
+_select_manual_device() {
+  local device
+  device="$(prompt_input "Caminho do dispositivo (ex.: /dev/sdc1)" "/dev/sdc1")"
+  if [[ ! -b "${device}" ]]; then
+    die "Dispositivo inválido: ${device}"
+  fi
+
+  local probed_fstype probed_label
+  IFS=$'\t' read -r probed_fstype probed_label < <(probe_fs_info "${device}" "" "")
+  if [[ -z "${probed_fstype}" ]]; then
+    die "Não foi possível detectar o filesystem de ${device}. Confira se o HD está conectado."
+  fi
+  if ! is_usable_data_fstype "${probed_fstype}"; then
+    die "Filesystem não suportado em ${device}: ${probed_fstype}"
+  fi
+
+  DISK_DEVICES=("${device}")
+  DISK_LABELS=("${probed_label:-$(basename "${device}")}")
+  DISK_FSTYPES=("${probed_fstype}")
+  DISK_SIZES=("$(lsblk -n -o SIZE "${device}" 2>/dev/null | head -n1 | tr -d ' ' || echo '?')")
+  local mp
+  mp="$(resolve_mountpoint "${device}" "")"
+  DISK_MOUNTS=("${mp:--}")
+  DISK_TRAN=("usb")
+  DISK_HOTPLUG=("1")
+  _apply_selected_disk 0
+}
+
+select_disk() {
+  detect_disks
+
+  echo -e "${C_BOLD}Detectando discos...${C_RESET}"
+  echo
+
+  if [[ ${#DISK_DEVICES[@]} -eq 0 ]]; then
+    log_warn "Nenhuma partição de dados detectada automaticamente."
+    echo
+    echo "Opções:"
+    echo "  [1] Usar caminho local (ex.: /home/${SUDO_USER:-user}/Musicas)"
+    echo "  [2] Informar dispositivo manualmente (ex.: /dev/sdc1)"
+    echo "  [3] Cancelar"
+    echo
+    local choice
+    choice="$(prompt_input "Escolha" "2")"
+    case "${choice}" in
+      1) _select_local_music_path; return 0 ;;
+      2) _select_manual_device; return 0 ;;
+      *) die "Instalação cancelada." ;;
+    esac
+  fi
+
+  local i bus_info
+  for i in "${!DISK_DEVICES[@]}"; do
+    local mp_info=""
+    bus_info=""
+    if [[ "${DISK_MOUNTS[$i]}" != "-" && -n "${DISK_MOUNTS[$i]}" ]]; then
+      mp_info=" → ${DISK_MOUNTS[$i]}"
+    fi
+    if [[ "${DISK_TRAN[$i]:-}" == "usb" || "${DISK_HOTPLUG[$i]:-}" == "1" ]]; then
+      bus_info=" ${C_CYAN}[USB/externo]${C_RESET}"
+    elif [[ -n "${DISK_TRAN[$i]:-}" ]]; then
+      bus_info=" ${C_DIM}[${DISK_TRAN[$i]}]${C_RESET}"
+    fi
+    echo -e "  [$((i + 1))] ${C_BOLD}${DISK_LABELS[$i]}${C_RESET} (${DISK_FSTYPES[$i]}) - ${DISK_SIZES[$i]}${bus_info}${C_DIM}${mp_info}${C_RESET}"
+  done
+  echo
+  echo "  [0] Usar caminho local (sem montar disco externo)"
+  echo "  [m] Informar dispositivo manualmente"
+  echo
+
+  local choice
+  choice="$(prompt_input "Escolha o disco" "1")"
+
+  if [[ "${choice}" == "0" ]]; then
+    _select_local_music_path
+    return 0
+  fi
+  if [[ "${choice}" =~ ^[Mm]$ ]]; then
+    _select_manual_device
+    return 0
+  fi
+
+  if ! [[ "${choice}" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#DISK_DEVICES[@]} )); then
+    die "Opção de disco inválida."
+  fi
+
+  _apply_selected_disk $((choice - 1))
 }
 
 # -----------------------------------------------------------------------------

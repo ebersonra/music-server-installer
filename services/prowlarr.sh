@@ -4,31 +4,55 @@
 
 _install_prowlarr_from_github() {
   log_info "Instalando Prowlarr via release GitHub (fallback)"
-  local arch="amd64"
-  case "${OS_ARCH}" in
-    amd64|x86_64) arch="amd64" ;;
-    arm64|aarch64) arch="arm64" ;;
-    armhf|armv7*) arch="arm" ;;
-    *) die "Arquitetura não suportada para Prowlarr: ${OS_ARCH}" ;;
-  esac
+  local arch
+  if declare -f _servarr_arch >/dev/null; then
+    arch="$(_servarr_arch)"
+  else
+    case "${OS_ARCH}" in
+      amd64|x86_64) arch="x64" ;;
+      arm64|aarch64) arch="arm64" ;;
+      armhf|armv7*) arch="arm" ;;
+      *) arch="" ;;
+    esac
+  fi
+  if [[ -z "${arch}" ]]; then
+    log_error "Arquitetura não suportada para Prowlarr: ${OS_ARCH}"
+    return 1
+  fi
 
   local api_url="https://api.github.com/repos/Prowlarr/Prowlarr/releases/latest"
   local download_url
-  download_url="$(curl -fsSL "${api_url}" \
+  # Assets usam linux-core-x64 (não amd64)
+  download_url="$(curl -fsSL "${api_url}" 2>/dev/null \
     | jq -r --arg arch "linux-core-${arch}" \
-      '[.assets[] | select(.name | test($arch) and endswith(".tar.gz")) | .browser_download_url][0] // empty')"
+      '[.assets[]? | select(.name | test($arch) and endswith(".tar.gz")) | .browser_download_url][0] // empty' \
+    2>/dev/null || true)"
 
   if [[ -z "${download_url}" || "${download_url}" == "null" ]]; then
-    die "Não foi possível obter URL de download do Prowlarr"
+    download_url="https://prowlarr.servarr.com/v1/update/master/updatefile?os=linux&runtime=netcore&arch=${arch}"
   fi
 
+  log_info "Baixando Prowlarr (${arch})..."
   local tmpdir
   tmpdir="$(mktemp -d)"
-  curl -fsSL -o "${tmpdir}/prowlarr.tar.gz" "${download_url}"
-  tar -xzf "${tmpdir}/prowlarr.tar.gz" -C "${tmpdir}"
+  if ! curl -fL --retry 3 --retry-delay 2 -o "${tmpdir}/prowlarr.tar.gz" "${download_url}"; then
+    log_error "Falha no download do Prowlarr"
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+  if ! tar -xzf "${tmpdir}/prowlarr.tar.gz" -C "${tmpdir}"; then
+    log_error "Arquivo Prowlarr inválido (tar)"
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+  if [[ ! -d "${tmpdir}/Prowlarr" ]]; then
+    log_error "Tarball do Prowlarr sem diretório Prowlarr/"
+    rm -rf "${tmpdir}"
+    return 1
+  fi
 
   rm -rf /opt/Prowlarr
-  mv "${tmpdir}"/Prowlarr /opt/Prowlarr
+  mv "${tmpdir}/Prowlarr" /opt/Prowlarr
   rm -rf "${tmpdir}"
 
   if ! id prowlarr &>/dev/null; then
@@ -76,8 +100,8 @@ _apply_prowlarr_config() {
   <SslPort>6969</SslPort>
   <EnableSsl>False</EnableSsl>
   <LaunchBrowser>False</LaunchBrowser>
-  <AuthenticationMethod>Forms</AuthenticationMethod>
-  <AuthenticationRequired>Enabled</AuthenticationRequired>
+  <AuthenticationMethod>None</AuthenticationMethod>
+  <AuthenticationRequired>DisabledForLocalAddresses</AuthenticationRequired>
   <Branch>master</Branch>
   <LogLevel>info</LogLevel>
   <UrlBase></UrlBase>
@@ -111,7 +135,9 @@ install_prowlarr() {
   fi
 
   if [[ "${installed}" != "true" ]]; then
-    _install_prowlarr_from_github
+    if ! _install_prowlarr_from_github; then
+      return 1
+    fi
   fi
 
   _apply_prowlarr_config

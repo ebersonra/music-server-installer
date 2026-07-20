@@ -100,13 +100,18 @@ main() {
 
   # Atualizar versão no estado (valores com quoting seguro)
   if [[ -f "${STATE_FILE}" ]]; then
-    local tmp_state
+    local tmp_state new_version
+    # Versão atual do instalador (de config.sh), não a do state antigo
+    new_version="$(
+      # shellcheck source=config.sh
+      source "${INSTALLER_ROOT}/config.sh"
+      printf '%s' "${INSTALLER_VERSION}"
+    )"
     tmp_state="$(mktemp)"
     # shellcheck source=/dev/null
     source "${STATE_FILE}"
-    INSTALLER_VERSION="${INSTALLER_VERSION}"
     {
-      printf 'INSTALLER_VERSION=%q\n' "${INSTALLER_VERSION}"
+      printf 'INSTALLER_VERSION=%q\n' "${new_version}"
       printf 'INSTALLED_AT=%q\n' "${INSTALLED_AT:-}"
       printf 'UPDATED_AT=%q\n' "$(date -Iseconds)"
       printf 'TARGET_USER=%q\n' "${TARGET_USER}"

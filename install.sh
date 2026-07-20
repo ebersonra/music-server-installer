@@ -46,6 +46,27 @@ parse_args() {
   done
 }
 
+INSTALL_ERRORS=()
+
+# Executa um passo; em falha registra e continua (não aborta o instalador)
+# Roda em subshell para que die()/exit internos não matem o install.sh
+run_install_step() {
+  local name="$1"
+  shift
+  set +e
+  (
+    set -euo pipefail
+    "$@"
+  )
+  local rc=$?
+  set -e
+  if [[ ${rc} -ne 0 ]]; then
+    log_error "${name} falhou (código ${rc}) — continuando a instalação"
+    INSTALL_ERRORS+=("${name}")
+  fi
+  return 0
+}
+
 show_summary() {
   print_separator
   echo -e "${C_BOLD}Resumo da instalação${C_RESET}"
@@ -62,6 +83,21 @@ show_summary() {
   [[ "${INSTALL_PROWLARR}" == "true" ]]    && echo -e "    ${C_GREEN}✓${C_RESET} Prowlarr"
   [[ "${INSTALL_QBITTORRENT}" == "true" ]] && echo -e "    ${C_GREEN}✓${C_RESET} qBittorrent"
   echo
+}
+
+show_install_errors() {
+  if [[ ${#INSTALL_ERRORS[@]} -eq 0 ]]; then
+    return 0
+  fi
+  echo
+  print_separator
+  log_warn "Alguns passos falharam:"
+  local e
+  for e in "${INSTALL_ERRORS[@]}"; do
+    echo -e "  ${C_RED}✗${C_RESET}  ${e}"
+  done
+  echo
+  echo -e "${C_DIM}Reexecute: sudo ./install.sh  (ou corrija o serviço e rode sudo ./update.sh)${C_RESET}"
 }
 
 main() {
@@ -105,35 +141,44 @@ main() {
   echo -e "${C_BOLD}Iniciando instalação...${C_RESET}"
   echo
 
-  # --- Fase automática ---
+  # --- Fase automática (passos críticos) ---
   ensure_media_group_early
   update_system
   install_dependencies
   configure_ntfs_mount
   create_music_folders
 
+  # --- Serviços: falha de um não aborta os demais ---
   if [[ "${INSTALL_PLEX}" == "true" ]]; then
-    install_plex
+    run_install_step "Plex" install_plex
   fi
   if [[ "${INSTALL_QBITTORRENT}" == "true" ]]; then
-    install_qbittorrent
+    run_install_step "qBittorrent" install_qbittorrent
   fi
   if [[ "${INSTALL_LIDARR}" == "true" ]]; then
-    install_lidarr
+    run_install_step "Lidarr" install_lidarr
   fi
   if [[ "${INSTALL_PROWLARR}" == "true" ]]; then
-    install_prowlarr
+    run_install_step "Prowlarr" install_prowlarr
   fi
 
-  configure_permissions
-  reapply_media_group
-  configure_firewall
+  run_install_step "Permissões" configure_permissions
+  run_install_step "Grupo media" reapply_media_group
+  run_install_step "Firewall" configure_firewall
 
   save_state
 
   echo
-  log_ok "Finalizado"
+  if [[ ${#INSTALL_ERRORS[@]} -eq 0 ]]; then
+    log_ok "Finalizado"
+  else
+    log_warn "Finalizado com avisos"
+  fi
   print_final_urls
+  show_install_errors
+
+  # Exit 1 só se algum serviço falhou (útil para automação)
+  [[ ${#INSTALL_ERRORS[@]} -eq 0 ]]
 }
 
 main "$@"
