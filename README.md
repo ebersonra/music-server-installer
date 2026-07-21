@@ -20,6 +20,7 @@ Também detecta discos (incluindo NTFS/USB), cria pastas, ajusta permissões e a
 ```
 music-server-installer/
 ├── install.sh              # Orquestrador interativo
+├── mount.sh                # Só remonta o disco (sem reinstalar)
 ├── update.sh               # Atualiza serviços instalados
 ├── uninstall.sh            # Remove serviços (preserva músicas)
 ├── common.sh               # Funções compartilhadas / UI / discos
@@ -131,6 +132,7 @@ Ouvir no celular: app **Plex** na mesma conta, na Wi‑Fi do servidor.
 | Script | Uso |
 |--------|-----|
 | `sudo ./install.sh` | Instalação interativa |
+| `sudo ./mount.sh` | **Só remonta o disco** (após reboot / HD replugado) |
 | `sudo ./update.sh` | Atualiza serviços |
 | `sudo ./uninstall.sh` | Remove serviços (músicas preservadas) |
 | `sudo ./uninstall.sh --purge-data` | Remove também configs dos apps |
@@ -152,10 +154,15 @@ sudo ./install.sh -h
 **HD NTFS / USB não aparece**  
 O instalador detecta via `lsblk` + `blkid`/`udevadm`. Se falhar, use a opção `[m]` e informe `/dev/sdX1`.
 
-**Mount fantasma (`/dev/sdb1` sumiu, agora é `sdc1`)**  
+**HD desmontou após reboot / letra mudou (`sdb` → `sdc`)**  
+```bash
+sudo ./mount.sh          # remonta usando o estado salvo
+sudo ./mount.sh -i       # escolher disco de novo
+```
+Mount fantasma antigo:
 ```bash
 sudo ./reset-mount.sh
-sudo ./install.sh
+sudo ./mount.sh
 ```
 Prefira montar em `/mnt/musicas`.
 
