@@ -45,5 +45,5 @@ echo
 echo "Pronto. Rode de novo:"
 echo "  sudo ./install.sh"
 echo
-echo "Dica: use ponto de montagem /mnt/musicas (não /media/music)."
+echo "Dica: ponto de montagem real deste setup: /media/music (Musicas + Fotos)."
 echo "      /media/* é gerenciado pelo desktop e o instalador não grava fstab nele."

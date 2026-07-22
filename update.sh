@@ -59,7 +59,8 @@ main() {
 
   echo -e "  Instalado em:  ${INSTALLED_AT:-desconhecido}"
   echo -e "  Usuário:       ${TARGET_USER}"
-  echo -e "  Biblioteca:    ${MUSIC_ROOT}"
+  echo -e "  Músicas:       ${MUSIC_ROOT}"
+  echo -e "  Fotos:         ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
   echo
   echo -e "  Serviços a atualizar:"
   [[ "${INSTALL_PLEX}" == "true" ]]        && echo -e "    ${C_GREEN}✓${C_RESET} Plex"
@@ -125,7 +126,9 @@ main() {
       printf 'MUSIC_ROOT=%q\n' "${MUSIC_ROOT}"
       printf 'DOWNLOADS_DIR=%q\n' "${DOWNLOADS_DIR}"
       printf 'INCOMPLETE_DIR=%q\n' "${INCOMPLETE_DIR}"
+      printf 'PHOTOS_ROOT=%q\n' "${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
       printf 'PLEX_LIBRARY_NAME=%q\n' "${PLEX_LIBRARY_NAME}"
+      printf 'PLEX_PHOTOS_LIBRARY_NAME=%q\n' "${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
       printf 'INSTALL_PLEX=%q\n' "${INSTALL_PLEX}"
       printf 'INSTALL_LIDARR=%q\n' "${INSTALL_LIDARR}"
       printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"

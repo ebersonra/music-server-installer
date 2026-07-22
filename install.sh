@@ -74,8 +74,10 @@ show_summary() {
   echo -e "  Usuário:     ${TARGET_USER}"
   echo -e "  Disco:       ${DISK_LABEL} (${DISK_DEVICE})"
   echo -e "  Montagem:    ${MOUNT_POINT}"
-  echo -e "  Biblioteca:  ${MUSIC_ROOT:-${MOUNT_POINT}/Musicas}"
-  echo -e "  Plex lib:    ${PLEX_LIBRARY_NAME}"
+  echo -e "  Músicas:     ${MUSIC_ROOT:-${MOUNT_POINT}/Musicas}"
+  echo -e "  Fotos:       ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
+  echo -e "  Plex music:  ${PLEX_LIBRARY_NAME}"
+  echo -e "  Plex photos: ${PLEX_PHOTOS_LIBRARY_NAME}"
   echo
   echo -e "  Serviços:"
   [[ "${INSTALL_PLEX}" == "true" ]]        && echo -e "    ${C_GREEN}✓${C_RESET} Plex"
@@ -116,7 +118,7 @@ main() {
 
   print_separator
   echo
-  echo -e "${C_BOLD}Nome da biblioteca Plex${C_RESET}"
+  echo -e "${C_BOLD}Nome da biblioteca Plex (músicas)${C_RESET}"
   echo
   PLEX_LIBRARY_NAME="$(prompt_input "Nome" "Músicas")"
   [[ -z "${PLEX_LIBRARY_NAME}" ]] && PLEX_LIBRARY_NAME="Músicas"
@@ -124,12 +126,21 @@ main() {
 
   print_separator
   echo
+  echo -e "${C_BOLD}Nome da biblioteca Plex (fotos)${C_RESET}"
+  echo
+  PLEX_PHOTOS_LIBRARY_NAME="$(prompt_input "Nome" "Fotos")"
+  [[ -z "${PLEX_PHOTOS_LIBRARY_NAME}" ]] && PLEX_PHOTOS_LIBRARY_NAME="Fotos"
+  echo
+
+  print_separator
+  echo
   select_services
 
-  # Definir MUSIC_ROOT se ainda não definido
+  # Definir roots se ainda não definidos
   MUSIC_ROOT="${MUSIC_ROOT:-${MOUNT_POINT}/Musicas}"
   DOWNLOADS_DIR="${MUSIC_ROOT}/Downloads"
   INCOMPLETE_DIR="${MUSIC_ROOT}/Downloads/Incomplete"
+  PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
 
   show_summary
 

@@ -28,18 +28,17 @@ Troque `SEU_IP` pelo IP da máquina (ex.: `192.168.0.19`).
 ### Pastas padrão do instalador
 
 ```
-/media/music/Musicas/              ← biblioteca (ajuste se usou outro ponto)
+/media/music/Musicas/              ← biblioteca
 ├── Artistas/                      ← Lidarr grava aqui (root folder)
 └── Downloads/                     ← qBittorrent baixa aqui
     └── Incomplete/
 ```
 
-Se você montou em `/mnt/musicas`, o caminho fica `/mnt/musicas/Musicas/...`.
-
 Confira o caminho real:
 
 ```bash
 grep MUSIC_ROOT /var/lib/music-server-installer/install.state
+# esperado: /media/music/Musicas
 ```
 
 ---
@@ -176,7 +175,8 @@ Opcional: em Lidarr, **Settings → Connect → + → Plex** para avisar o Plex 
 6. Disco montado?
 
 ```bash
-findmnt /media/music   # ou /mnt/musicas
+findmnt /media/music
+ls -la /media/music/Musicas /media/music/Fotos
 ls -la "$(grep -oP 'MUSIC_ROOT=\K.*' /var/lib/music-server-installer/install.state | tr -d "'")"
 ```
 

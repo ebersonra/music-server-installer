@@ -90,15 +90,17 @@ main() {
       log_warn "Sem usuário válido — qBittorrent não será desinstalado via template"
     fi
     PLEX_LIBRARY_NAME="Músicas"
+    PLEX_PHOTOS_LIBRARY_NAME="Fotos"
   else
     log_ok "Estado carregado (instalado em ${INSTALLED_AT:-desconhecido})"
     echo -e "  Usuário: ${TARGET_USER}"
-    echo -e "  Biblioteca: ${MUSIC_ROOT}"
+    echo -e "  Músicas: ${MUSIC_ROOT}"
+    echo -e "  Fotos: ${PHOTOS_ROOT:-n/a}"
   fi
 
   echo
   log_warn "Isso removerá os serviços instalados pelo Music Server Installer."
-  log_warn "A biblioteca de músicas em disco NÃO será apagada."
+  log_warn "A biblioteca de músicas e as fotos em disco NÃO serão apagadas."
   echo
 
   if ! confirm "Desinstalar agora?" "N"; then
@@ -145,7 +147,8 @@ main() {
   echo
   echo -e "${C_GREEN}Desinstalação concluída.${C_RESET}"
   echo -e "${C_DIM}Backups (se houver): ${BACKUP_DIR}${C_RESET}"
-  echo -e "${C_DIM}Biblioteca preservada: ${MUSIC_ROOT:-n/a}${C_RESET}"
+  echo -e "${C_DIM}Músicas preservadas: ${MUSIC_ROOT:-n/a}${C_RESET}"
+  echo -e "${C_DIM}Fotos preservadas: ${PHOTOS_ROOT:-n/a}${C_RESET}"
   echo
 }
 

@@ -30,13 +30,15 @@ DISK_DEVICE=""
 DISK_LABEL=""
 DISK_FSTYPE=""
 DISK_SIZE=""
-MOUNT_POINT="/mnt/musicas"
+MOUNT_POINT="/media/music"
 MUSIC_ROOT=""
 DOWNLOADS_DIR=""
 INCOMPLETE_DIR=""
+PHOTOS_ROOT=""
 
-# Biblioteca Plex
+# Bibliotecas Plex
 PLEX_LIBRARY_NAME="Músicas"
+PLEX_PHOTOS_LIBRARY_NAME="Fotos"
 
 # Serviços selecionados (true/false)
 INSTALL_PLEX=true
@@ -75,6 +77,7 @@ COMMON_DEPS=(
   jq
   unzip
   sqlite3
+  openssh-server
 )
 
 # Cores (podem ser desabilitadas com NO_COLOR=1)

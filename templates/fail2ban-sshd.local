@@ -1,0 +1,13 @@
+[sshd]
+enabled = true
+port    = ssh
+filter  = sshd
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+# Após 3 bans no dia, bloqueia 24h
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 24h
+ignoreregex =

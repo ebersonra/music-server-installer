@@ -67,6 +67,18 @@ configure_permissions() {
     fi
   fi
 
+  if [[ -d "${PHOTOS_ROOT:-}" ]]; then
+    case "${DISK_FSTYPE:-}" in
+      ntfs|ntfs3|fuseblk|vfat|exfat)
+        log_info "Filesystem ${DISK_FSTYPE}: pulando chown em ${PHOTOS_ROOT}"
+        ;;
+      *)
+        chown -R "${TARGET_UID}:media" "${PHOTOS_ROOT}" 2>/dev/null || true
+        chmod -R u+rwX,g+rwX,o+rX "${PHOTOS_ROOT}" 2>/dev/null || true
+        ;;
+    esac
+  fi
+
   # TARGET_USER também no grupo de cada serviço
   for svc_user in plex lidarr prowlarr; do
     if id "${svc_user}" &>/dev/null; then
@@ -88,4 +100,10 @@ reapply_media_group() {
     fi
   done
   _safe_chown_music "${TARGET_UID}:media"
+  if [[ -d "${PHOTOS_ROOT:-}" ]]; then
+    case "${DISK_FSTYPE:-}" in
+      ntfs|ntfs3|fuseblk|vfat|exfat) ;;
+      *) chown -R "${TARGET_UID}:media" "${PHOTOS_ROOT}" 2>/dev/null || true ;;
+    esac
+  fi
 }

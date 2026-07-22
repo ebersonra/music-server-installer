@@ -6,7 +6,7 @@ Instala e configura:
 
 | Serviço      | Porta  | Função                          |
 |--------------|--------|---------------------------------|
-| **Plex**     | `32400`| Biblioteca e playback           |
+| **Plex**     | `32400`| Músicas + fotos (HD externo)    |
 | **Lidarr**   | `8686` | Gerência de artistas/álbuns     |
 | **Prowlarr** | `9696` | Indexadores                     |
 | **qBittorrent** | `8080` | Cliente de download          |
@@ -23,6 +23,10 @@ music-server-installer/
 ├── mount.sh                # Só remonta o disco (sem reinstalar)
 ├── update.sh               # Atualiza serviços instalados
 ├── uninstall.sh            # Remove serviços (preserva músicas)
+├── setup-cloud-backup.sh   # Configura rclone + timer (restic/zip → nuvem)
+├── backup-cloud.sh         # Backup compacto HD → nuvem (restic ou zip)
+├── setup-security.sh       # Fail2Ban + updates + restic
+├── backup-restic.sh        # Snapshots criptografados (restic)
 ├── common.sh               # Funções compartilhadas / UI / discos
 ├── config.sh               # Variáveis e defaults
 ├── fix-servarr-auth.sh     # Corrige auth Lidarr/Prowlarr
@@ -37,11 +41,21 @@ music-server-installer/
 │   ├── qbittorrent.sh
 │   ├── mountdisk.sh        # NTFS / fstab / montagem
 │   ├── firewall.sh
-│   └── permissions.sh
+│   ├── permissions.sh
+│   └── security.sh         # Fail2Ban / unattended-upgrades
+│
+├── docs/
+│   ├── plex-photos.md      # Guia Plex Photos
+│   ├── foldersync.md       # How-to FolderSync no celular
+│   ├── cloud-backup.md     # Backup HD → Google Drive / nuvem
+│   └── security.md         # Fail2Ban, updates, restic
 │
 └── templates/
     ├── lidarr.xml
     ├── qbittorrent.conf
+    ├── cloud-backup.conf
+    ├── restic-backup.conf
+    ├── fail2ban-sshd.local
     └── systemd/
         ├── lidarr.service
         ├── prowlarr.service
@@ -73,8 +87,9 @@ sudo ./install.sh
 
 1. Disco / partição (prioriza USB/externo)
 2. Usuário do sistema
-3. Nome da biblioteca Plex (padrão: `Músicas`)
-4. Quais serviços instalar
+3. Nome da biblioteca Plex de músicas (padrão: `Músicas`)
+4. Nome da biblioteca Plex de fotos (padrão: `Fotos`)
+5. Quais serviços instalar
 
 ### O que faz em seguida
 
@@ -93,13 +108,26 @@ Se um serviço falhar, a instalação **continua** e lista os erros no final.
 ### Pastas criadas
 
 ```
-<ponto-de-montagem>/Musicas/
+/media/music/Musicas/
 ├── Artistas/          # biblioteca do Lidarr / Plex
 └── Downloads/         # qBittorrent
     └── Incomplete/
+
+/media/music/Fotos/    # Plex Photos (mesmo HD)
+├── Camera/
+├── WhatsApp/
+├── Screenshots/
+├── Familia/
+├── Viagens/
+└── Backup/
 ```
 
-Padrão sugerido de montagem: `/mnt/musicas` (evite `/media/...` para fstab estável).
+Ponto de montagem padrão: `/media/music`.
+
+Guia de fotos: **[docs/plex-photos.md](docs/plex-photos.md)**.  
+FolderSync no celular: **[docs/foldersync.md](docs/foldersync.md)**.  
+Backup do HD na nuvem: **[docs/cloud-backup.md](docs/cloud-backup.md)**.  
+Segurança (Fail2Ban / updates / restic): **[docs/security.md](docs/security.md)**.
 
 ---
 
@@ -120,6 +148,7 @@ qBittorrent  http://IP:8080
   ```
 - **Lidarr / Prowlarr:** no 1º acesso, configure Forms + usuário em  
   **Settings → General → Security**.
+- **Plex Photos:** adicione biblioteca tipo Photos apontando para `/media/music/Fotos`. Sync do celular: [docs/foldersync.md](docs/foldersync.md).
 
 Guia completo de configuração e downloads: **[how-to.md](how-to.md)**.
 
@@ -134,8 +163,12 @@ Ouvir no celular: app **Plex** na mesma conta, na Wi‑Fi do servidor.
 | `sudo ./install.sh` | Instalação interativa |
 | `sudo ./mount.sh` | **Só remonta o disco** (após reboot / HD replugado) |
 | `sudo ./update.sh` | Atualiza serviços |
-| `sudo ./uninstall.sh` | Remove serviços (músicas preservadas) |
+| `sudo ./uninstall.sh` | Remove serviços (músicas/fotos preservadas) |
 | `sudo ./uninstall.sh --purge-data` | Remove também configs dos apps |
+| `sudo ./setup-cloud-backup.sh` | Configura backup compacto HD → nuvem (rclone) |
+| `sudo ./backup-cloud.sh` | Envia restic (snapshots) ou *.zip para a nuvem |
+| `sudo ./setup-security.sh` | Fail2Ban + updates automáticos + restic |
+| `sudo ./backup-restic.sh` | Snapshot criptografado (restic) |
 | `sudo ./fix-servarr-auth.sh` | Corrige login/HTTP 500 do Lidarr/Prowlarr |
 | `sudo ./reset-mount.sh` | Desmonta mount fantasma (ex.: `/media/music`) |
 
@@ -164,7 +197,7 @@ Mount fantasma antigo:
 sudo ./reset-mount.sh
 sudo ./mount.sh
 ```
-Prefira montar em `/mnt/musicas`.
+Prefira montar em `/media/music` (paths: `/media/music/Musicas`, `/media/music/Fotos`).
 
 **Lidarr/Prowlarr com HTTP 500 (DryIoc / auth)**  
 ```bash

@@ -493,8 +493,8 @@ _apply_selected_disk() {
     fi
     if [[ "${current_mp}" == /media/* ]]; then
       log_warn "Disco montado pelo desktop em ${current_mp}"
-      if confirm "Remontar em /mnt/musicas com permissões do instalador?"; then
-        MOUNT_POINT="/mnt/musicas"
+      if confirm "Remontar em /media/music com permissões do instalador?"; then
+        MOUNT_POINT="/media/music"
       else
         MOUNT_POINT="${current_mp}"
         MANAGE_FSTAB=false
@@ -510,7 +510,7 @@ _apply_selected_disk() {
       fi
     fi
   else
-    MOUNT_POINT="$(prompt_input "Ponto de montagem" "/mnt/musicas")"
+    MOUNT_POINT="$(prompt_input "Ponto de montagem" "/media/music")"
     if declare -f validate_mount_point >/dev/null; then
       validate_mount_point "${MOUNT_POINT}"
     fi
@@ -633,16 +633,16 @@ select_services() {
   echo
 
   local services=("Plex" "Lidarr" "Prowlarr" "qBittorrent")
-  local flags=(INSTALL_PLEX INSTALL_LIDARR INSTALL_PROWLARR INSTALL_QBITTORRENT)
   local selected=(true true true true)
   local i
 
   for i in "${!services[@]}"; do
-    echo -e "  ${C_GREEN}[✓]${C_RESET} ${services[$i]}"
+    echo -e "  ${C_GREEN}[✓]${C_RESET} $((i + 1)). ${services[$i]}"
   done
   echo
   echo -e "${C_DIM}Pressione Enter para instalar todos, ou informe números para desmarcar${C_RESET}"
   echo -e "${C_DIM}(ex.: 1 3 = desmarcar Plex e Prowlarr)${C_RESET}"
+  echo -e "${C_DIM}Com o Plex: pastas de fotos no HD + SFTP (FolderSync) para o celular${C_RESET}"
   echo
 
   local input
@@ -722,12 +722,53 @@ install_dependencies() {
 # -----------------------------------------------------------------------------
 # Pastas da biblioteca
 # -----------------------------------------------------------------------------
+create_photo_folders() {
+  PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
+  PLEX_PHOTOS_LIBRARY_NAME="${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
+
+  local dirs=(
+    "${PHOTOS_ROOT}"
+    "${PHOTOS_ROOT}/Camera"
+    "${PHOTOS_ROOT}/WhatsApp"
+    "${PHOTOS_ROOT}/Screenshots"
+    "${PHOTOS_ROOT}/Familia"
+    "${PHOTOS_ROOT}/Viagens"
+    "${PHOTOS_ROOT}/Backup"
+  )
+
+  local d
+  for d in "${dirs[@]}"; do
+    mkdir -p "${d}"
+  done
+
+  if declare -f _safe_media_symlink >/dev/null; then
+    # Evita symlink /media/Fotos → /media/music/Fotos (redundante / confuso)
+    if [[ "${PHOTOS_ROOT}" != "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
+      _safe_media_symlink "${PHOTOS_ROOT}" "/media/${PLEX_PHOTOS_LIBRARY_NAME}"
+    fi
+  else
+    mkdir -p /media
+    if [[ "${PHOTOS_ROOT}" != "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
+      if [[ -L "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]] || [[ ! -e "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
+        ln -sfn "${PHOTOS_ROOT}" "/media/${PLEX_PHOTOS_LIBRARY_NAME}" 2>/dev/null || true
+        chown -h "${TARGET_UID}:${TARGET_GID}" "/media/${PLEX_PHOTOS_LIBRARY_NAME}" 2>/dev/null || true
+      elif [[ -d "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
+        log_warn "/media/${PLEX_PHOTOS_LIBRARY_NAME} já é um diretório — mantendo"
+      fi
+    fi
+  fi
+
+  chown -R "${TARGET_UID}:${TARGET_GID}" "${PHOTOS_ROOT}" 2>/dev/null || true
+  log_ok "Pastas de fotos em ${PHOTOS_ROOT}"
+}
+
 create_music_folders() {
   log_step "Criando pastas"
 
   MUSIC_ROOT="${MUSIC_ROOT:-${MOUNT_POINT}/Musicas}"
   DOWNLOADS_DIR="${MUSIC_ROOT}/Downloads"
   INCOMPLETE_DIR="${MUSIC_ROOT}/Downloads/Incomplete"
+  PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
 
   local dirs=(
     "${MUSIC_ROOT}"
@@ -744,6 +785,9 @@ create_music_folders() {
 
   chown -R "${TARGET_UID}:${TARGET_GID}" "${MUSIC_ROOT}" 2>/dev/null || true
   log_ok "Pastas criadas em ${MUSIC_ROOT}"
+
+  # Sempre no HD externo (mesmo fluxo das músicas)
+  create_photo_folders
 }
 
 # -----------------------------------------------------------------------------
@@ -765,7 +809,9 @@ save_state() {
     printf 'MUSIC_ROOT=%q\n' "${MUSIC_ROOT}"
     printf 'DOWNLOADS_DIR=%q\n' "${DOWNLOADS_DIR}"
     printf 'INCOMPLETE_DIR=%q\n' "${INCOMPLETE_DIR}"
+    printf 'PHOTOS_ROOT=%q\n' "${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
     printf 'PLEX_LIBRARY_NAME=%q\n' "${PLEX_LIBRARY_NAME}"
+    printf 'PLEX_PHOTOS_LIBRARY_NAME=%q\n' "${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
     printf 'INSTALL_PLEX=%q\n' "${INSTALL_PLEX}"
     printf 'INSTALL_LIDARR=%q\n' "${INSTALL_LIDARR}"
     printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"
@@ -785,6 +831,8 @@ load_state() {
     log_warn "Estado inválido: TARGET_USER vazio"
     return 1
   fi
+  PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
+  PLEX_PHOTOS_LIBRARY_NAME="${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
   QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
   return 0
 }
@@ -856,6 +904,9 @@ print_final_urls() {
   if [[ "${INSTALL_PLEX}" == "true" ]]; then
     echo -e "${C_BOLD}Plex${C_RESET}"
     echo -e "http://${ip}:${PORT_PLEX}/web"
+    echo -e "${C_DIM}Músicas: ${MUSIC_ROOT}${C_RESET}"
+    echo -e "${C_DIM}Fotos:   ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}${C_RESET}"
+    echo -e "${C_DIM}SFTP (FolderSync): sftp://${ip} → ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}${C_RESET}"
     echo
   fi
   if [[ "${INSTALL_LIDARR}" == "true" ]]; then
@@ -882,6 +933,7 @@ print_final_urls() {
   echo -e "${C_CYAN}====================================${C_RESET}"
   echo
   echo -e "${C_DIM}Biblioteca: ${MUSIC_ROOT}${C_RESET}"
+  echo -e "${C_DIM}Fotos:      ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}${C_RESET}"
   echo -e "${C_DIM}Estado:     ${STATE_FILE}${C_RESET}"
   echo
 }
