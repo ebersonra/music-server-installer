@@ -77,20 +77,15 @@ Em servidor **sem interface gráfica**, responda **n** no auto config e siga as 
 Na nuvem você guarda o **histórico criptografado**, não uma segunda cópia navegável das pastas. Restore:
 
 ```bash
-set -a
-source /var/lib/music-server-installer/restic-backup.conf
-set +a
-export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
-
-# Se restaurou o repo da nuvem para um path local:
-# export RESTIC_REPOSITORY=/caminho/do/repo
-
-restic snapshots
-restic restore latest --target /tmp/restore-test
+sudo ./restore-restic.sh --list
+sudo ./restore-restic.sh --target /tmp/restore-test
+# repo local sumiu:
+sudo ./restore-restic.sh --from-cloud --target /tmp/restore-test --photos-only
 ```
 
-Guarde a senha de `/var/lib/music-server-installer/restic.password` **fora do PC**.
+Detalhes: **[security.md](security.md)** (seção Restore).
 
+Guarde a senha de `/var/lib/music-server-installer/restic.password` **fora do PC**.
 ## Payload zip
 
 Gera `musicas-YYYYMMDD.zip` / `fotos-YYYYMMDD.zip`, sobe para `remote:.../zips/` e mantém as N versões mais recentes (`ZIP_KEEP_REMOTE`).
@@ -158,8 +153,21 @@ sudo systemctl disable --now music-server-cloud-backup.timer
 **Auth / token expirado**
 
 ```bash
+sudo -u SEU_USUARIO rclone config reconnect "Google Drive:"
+# ou, se o remote se chama gdrive:
 sudo -u SEU_USUARIO rclone config reconnect gdrive:
 ```
+
+**Permission denied em `/media/backup-restic`**  
+O repo restic é `root:root` com pastas `700`. O script sobe o repo como **root** usando o `rclone.conf` do `BACKUP_USER`. Se ainda falhar, confira:
+
+```bash
+sudo ls -la /media/backup-restic
+sudo ./backup-cloud.sh --dry-run --payload restic
+```
+
+**Repo restic no disco do sistema**  
+Se `RESTIC_REPOSITORY` for `/media/backup-restic` (ou similar em `/`), o snapshot cresce no SSD do notebook — preferível path no HD externo, ex. `/media/music/.restic-repo`.
 
 **HD desmontado**
 
@@ -183,9 +191,11 @@ Na config, reduza transfers / tpslimit:
 RCLONE_EXTRA_OPTS="--fast-list --checkers 4 --transfers 2 --tpslimit 5 --retries 5"
 ```
 
+**Aviso `shared Google Drive client_id`**  
+O client_id padrão do rclone será desativado em 2026. Crie o seu: https://rclone.org/drive/#making-your-own-client-id
+
 **Dry-run ok, job real falha**  
 Veja o log do dia e `journalctl -u music-server-cloud-backup.service`.
-
 ---
 
 Camadas de segurança (Fail2Ban, updates, restic): **[security.md](security.md)**.

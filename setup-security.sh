@@ -265,6 +265,7 @@ main() {
   echo -e "${C_DIM}Fail2Ban:   sudo fail2ban-client status sshd${C_RESET}"
   echo -e "${C_DIM}Updates:    sudo unattended-upgrade --dry-run${C_RESET}"
   echo -e "${C_DIM}restic:     sudo ./backup-restic.sh${C_RESET}"
+  echo -e "${C_DIM}restore:    sudo ./restore-restic.sh --list${C_RESET}"
   echo -e "${C_DIM}Guia:       docs/security.md${C_RESET}"
   echo
 }

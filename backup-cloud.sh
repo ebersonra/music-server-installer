@@ -129,6 +129,9 @@ ensure_mount_ready() {
   fi
 }
 
+# Como executar o rclone: user (OAuth como BACKUP_USER) | root (lê repo restic 700)
+RCLONE_RUN_MODE="${RCLONE_RUN_MODE:-user}"
+
 rclone_backup_user() {
   local backup_user="${BACKUP_USER:-}"
   if [[ -z "${backup_user}" ]]; then
@@ -140,6 +143,18 @@ rclone_backup_user() {
   printf '%s' "${backup_user}"
 }
 
+rclone_conf_path() {
+  local backup_user conf_home
+  backup_user="$(rclone_backup_user)"
+  conf_home="$(getent passwd "${backup_user}" | cut -d: -f6)"
+  local rclone_conf="${conf_home}/.config/rclone/rclone.conf"
+  if [[ ! -f "${rclone_conf}" ]]; then
+    die "rclone.conf não encontrado em ${rclone_conf}
+Como ${backup_user}, rode: rclone config"
+  fi
+  printf '%s' "${rclone_conf}"
+}
+
 ensure_backup_log_dir() {
   local backup_user
   backup_user="$(rclone_backup_user)"
@@ -148,17 +163,21 @@ ensure_backup_log_dir() {
   chmod 750 "${BACKUP_LOG_DIR}"
 }
 
-rclone_as_user() {
-  local backup_user
-  backup_user="$(rclone_backup_user)"
-
-  local conf_home
-  conf_home="$(getent passwd "${backup_user}" | cut -d: -f6)"
-  local rclone_conf="${conf_home}/.config/rclone/rclone.conf"
-  if [[ ! -f "${rclone_conf}" ]]; then
-    die "rclone.conf não encontrado em ${rclone_conf}
-Como ${backup_user}, rode: rclone config"
+# rclone com o conf do BACKUP_USER, mas sem dropar root (lê /media/backup-restic 700)
+rclone_as_root_with_user_conf() {
+  local rclone_conf
+  rclone_conf="$(rclone_conf_path)"
+  if [[ "${EUID}" -ne 0 ]]; then
+    die "Sync do repositório restic precisa de root (pastas do repo são 700 root)"
   fi
+  env RCLONE_CONFIG="${rclone_conf}" rclone "$@"
+}
+
+# rclone como BACKUP_USER (OAuth / tokens no home do usuário)
+rclone_as_user() {
+  local backup_user rclone_conf
+  backup_user="$(rclone_backup_user)"
+  rclone_conf="$(rclone_conf_path)"
 
   if [[ "${EUID}" -eq 0 ]]; then
     if command -v runuser >/dev/null 2>&1; then
@@ -169,6 +188,14 @@ Como ${backup_user}, rode: rclone config"
   else
     RCLONE_CONFIG="${rclone_conf}" rclone "$@"
   fi
+}
+
+rclone_exec() {
+  case "${RCLONE_RUN_MODE}" in
+    root) rclone_as_root_with_user_conf "$@" ;;
+    user) rclone_as_user "$@" ;;
+    *) die "RCLONE_RUN_MODE inválido: ${RCLONE_RUN_MODE} (use user ou root)" ;;
+  esac
 }
 
 run_rclone_transfer() {
@@ -217,7 +244,7 @@ run_rclone_transfer() {
     log_step "Upload ${label}: ${src} → ${dest}"
   fi
 
-  if rclone_as_user "${args[@]}"; then
+  if rclone_exec "${args[@]}"; then
     log_ok "${label} concluído (log: ${log_file})"
   else
     log_error "${label} falhou — veja ${log_file}"
@@ -273,6 +300,11 @@ upload_restic_repo() {
 Para modo cloud, use path local (ex.: /mnt/backup/restic-repo) ou rclone:gdrive:..."
   fi
 
+  # Canonicalizar (ex.: /media/music/../backup-restic → /media/backup-restic)
+  if command -v realpath >/dev/null 2>&1; then
+    RESTIC_REPOSITORY="$(realpath -m "${RESTIC_REPOSITORY}")"
+  fi
+
   if [[ ! -d "${RESTIC_REPOSITORY}" ]]; then
     die "Repositório restic inexistente: ${RESTIC_REPOSITORY}
 Crie o 1º snapshot: sudo ./backup-restic.sh"
@@ -282,11 +314,20 @@ Crie o 1º snapshot: sudo ./backup-restic.sh"
 
   local dest="${RCLONE_REMOTE}:${RCLONE_PATH}/${RESTIC_CLOUD_SUBDIR}"
   # sync mantém o repo remoto alinhado (prune local remove packs órfãos)
+  # root + conf do BACKUP_USER: pastas do restic são 700 root; OAuth fica no home do usuário
   local saved_mode="${RCLONE_MODE}"
+  local saved_run="${RCLONE_RUN_MODE}"
   RCLONE_MODE="sync"
+  RCLONE_RUN_MODE="root"
+  log_info "Sync do repo restic como root (lê ${RESTIC_REPOSITORY}, OAuth de $(rclone_backup_user))"
   run_rclone_transfer "restic-repo" "${RESTIC_REPOSITORY}" "${dest}" \
-    "**/.lock" || { RCLONE_MODE="${saved_mode}"; return 1; }
+    "**/.lock" || {
+      RCLONE_MODE="${saved_mode}"
+      RCLONE_RUN_MODE="${saved_run}"
+      return 1
+    }
   RCLONE_MODE="${saved_mode}"
+  RCLONE_RUN_MODE="${saved_run}"
 }
 
 # -----------------------------------------------------------------------------

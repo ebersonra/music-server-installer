@@ -27,6 +27,7 @@ music-server-installer/
 ├── backup-cloud.sh         # Backup compacto HD → nuvem (restic ou zip)
 ├── setup-security.sh       # Fail2Ban + updates + restic
 ├── backup-restic.sh        # Snapshots criptografados (restic)
+├── restore-restic.sh       # Restore de snapshots (local ou nuvem)
 ├── common.sh               # Funções compartilhadas / UI / discos
 ├── config.sh               # Variáveis e defaults
 ├── fix-servarr-auth.sh     # Corrige auth Lidarr/Prowlarr
@@ -169,6 +170,7 @@ Ouvir no celular: app **Plex** na mesma conta, na Wi‑Fi do servidor.
 | `sudo ./backup-cloud.sh` | Envia restic (snapshots) ou *.zip para a nuvem |
 | `sudo ./setup-security.sh` | Fail2Ban + updates automáticos + restic |
 | `sudo ./backup-restic.sh` | Snapshot criptografado (restic) |
+| `sudo ./restore-restic.sh` | Restaura snapshots restic (local ou nuvem) |
 | `sudo ./fix-servarr-auth.sh` | Corrige login/HTTP 500 do Lidarr/Prowlarr |
 | `sudo ./reset-mount.sh` | Desmonta mount fantasma (ex.: `/media/music`) |
 

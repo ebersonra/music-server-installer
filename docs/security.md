@@ -103,21 +103,6 @@ sudo ./backup-restic.sh --dry-run
 sudo ./backup-restic.sh --prune-only
 ```
 
-Listar / restaurar:
-
-```bash
-# carregar env
-set -a
-source /var/lib/music-server-installer/restic-backup.conf
-set +a
-export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
-
-restic snapshots
-restic restore latest --target /tmp/restore-test
-# ou só fotos:
-restic restore latest --target /tmp/restore-fotos --include /media/music/Fotos
-```
-
 Retenção padrão: 7 diários, 4 semanais, 6 mensais, 2 anuais.
 
 Timer: `music-server-restic.timer` (padrão 04:00).
@@ -127,6 +112,114 @@ systemctl status music-server-restic.timer
 journalctl -u music-server-restic.service -n 40 --no-pager
 ```
 
+### Restore (recuperar arquivos)
+
+Use o script `restore-restic.sh` (ou a CLI do restic diretamente).  
+**Sem a senha** em `/var/lib/music-server-installer/restic.password`, os dados são irrecuperáveis.
+
+#### Com o script
+
+```bash
+# Listar snapshots
+sudo ./restore-restic.sh --list
+
+# Teste completo (não sobrescreve o HD)
+sudo ./restore-restic.sh --target /tmp/restore-test
+
+# Só fotos / só músicas
+sudo ./restore-restic.sh --target /tmp/fotos --photos-only
+sudo ./restore-restic.sh --target /tmp/musicas --music-only
+
+# Snapshot antigo (ID de --list)
+sudo ./restore-restic.sh --target /tmp/restore-old --snapshot 97b32555
+
+# Simular
+sudo ./restore-restic.sh --target /tmp/x --photos-only --dry-run
+
+# Repo local perdido → baixar espelho da nuvem e restaurar
+sudo ./restore-restic.sh --from-cloud --list
+sudo ./restore-restic.sh --from-cloud --target /tmp/restore-cloud --photos-only
+```
+
+| Opção | Função |
+|-------|--------|
+| `--list` | Só lista snapshots |
+| `--target DIR` | Destino do restore |
+| `--snapshot ID` | ID ou `latest` (padrão) |
+| `--photos-only` / `--music-only` | Filtra origem |
+| `--include PATH` | Caminho absoluto no snapshot |
+| `--from-cloud` | `rclone sync` de `remote:…/restic-repo` antes |
+| `--cloud-repo-dir DIR` | Onde gravar o repo baixado |
+| `--dry-run` | Não grava arquivos |
+| `--verify` | Roda `restic check` (amostra) após o restore |
+
+#### Onde os arquivos aparecem
+
+Os snapshots guardam **paths absolutos** (`/media/music/Musicas`, `/media/music/Fotos`).
+
+- **Restore total** (`--target /tmp/restore-test`):  
+  → `/tmp/restore-test/media/music/Musicas/…`  
+  → `/tmp/restore-test/media/music/Fotos/…`
+- **Com `--photos-only` / `--music-only` / `--include`**: o script usa a sintaxe `snapshot:subpasta`, então o conteúdo vai **direto** em `--target` (sem o prefixo `/media/music/…`).
+
+#### Recolocar no HD (cuidado)
+
+Prefira restaurar em `/tmp`, conferir, e só então copiar:
+
+```bash
+sudo ./restore-restic.sh --target /tmp/fotos --photos-only
+# conferir…
+sudo rsync -aH --info=progress2 /tmp/fotos/ /media/music/Fotos/
+```
+
+Restore **direto** no HD sobrescreve o que estiver lá:
+
+```bash
+# perigoso se o HD ainda tiver dados bons
+sudo ./restore-restic.sh --target /media/music/Fotos --photos-only
+```
+
+#### CLI manual (equivalente)
+
+```bash
+set -a
+source /var/lib/music-server-installer/restic-backup.conf
+set +a
+export RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
+
+restic snapshots
+restic ls latest | head
+restic find 'nome-do-arquivo'
+
+restic restore latest --target /tmp/restore-test
+restic restore latest:/media/music/Fotos --target /tmp/fotos
+restic restore 97b32555 --target /tmp/restore-old --include /media/music/Fotos
+```
+
+#### Restore só a partir do Google Drive
+
+Se `/media/backup-restic` sumiu, mas o espelho na nuvem existe (`backup-cloud.sh --payload restic`):
+
+```bash
+# Via script (baixa para /var/lib/music-server-installer/restic-from-cloud)
+sudo ./restore-restic.sh --from-cloud --list
+sudo ./restore-restic.sh --from-cloud --target /tmp/restore-test
+
+# Ou manualmente
+rclone sync "Google Drive:music-server-backup/restic-repo" /media/backup-restic-restore
+export RESTIC_REPOSITORY=/media/backup-restic-restore
+# + RESTIC_PASSWORD_FILE como acima
+restic snapshots
+restic restore latest --target /tmp/restore-test
+```
+
+#### Checklist de restore
+
+- [ ] Senha restic disponível (arquivo ou cópia offline)
+- [ ] `sudo ./restore-restic.sh --list` mostra snapshots
+- [ ] Teste em `/tmp/restore-test` ok
+- [ ] HD montado se for recolocar em `/media/music`
+- [ ] Se repo local sumiu: `--from-cloud` ou `rclone sync` do `restic-repo`
 ## Estratégia sugerida (família)
 
 1. **restic** diário → disco local **e/ou** nuvem (`backup-cloud.sh --payload restic`)  
@@ -140,7 +233,7 @@ journalctl -u music-server-restic.service -n 40 --no-pager
 - [ ] `unattended-upgrade --dry-run` ok  
 - [ ] Senha restic guardada offline  
 - [ ] `sudo ./backup-restic.sh` criou o 1º snapshot  
-- [ ] Teste de restore em `/tmp/restore-test`  
+- [ ] Teste de restore: `sudo ./restore-restic.sh --target /tmp/restore-test`  
 - [ ] HD montado (`findmnt /media/music`) antes dos jobs  
 
 ## Relação com rclone
@@ -153,4 +246,4 @@ journalctl -u music-server-restic.service -n 40 --no-pager
 | Deduplicação | No repo restic | Forte |
 | Navegar no Drive | Repo opaco / zips | Precisa `restic mount` / restore |
 
-Para fotos da família, **restic + sync do repo na nuvem** é a rede de segurança; zip é alternativa simples.
+Para fotos da família, **restic + sync do repo na nuvem** é a rede de segurança; zip é alternativa simples. Restore: `sudo ./restore-restic.sh`.
