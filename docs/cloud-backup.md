@@ -110,8 +110,37 @@ sudo nano /var/lib/music-server-installer/cloud-backup.conf
 | `RESTIC_CLOUD_SUBDIR` | Subpasta do repo na nuvem |
 | `ZIP_KEEP_REMOTE` | Quantos zips datados manter na nuvem |
 | `ZIP_COMPRESSION` | `0`–`9` (use `0` para mídia) |
-| `BACKUP_SCHEDULE` | Horário do timer |
+| `BACKUP_SCHEDULE` | Horário do timer (`*-*-* 00:00:00` com janela noturna) |
+| `BACKUP_WINDOW_ENABLED` | `true` = só sobe dentro da janela |
+| `BACKUP_WINDOW_START` / `END` | Ex.: `00:00` / `06:00` |
+| `BACKUP_MAX_DURATION` | Opcional (ex.: `6h`); vazio = até o fim da janela |
 | `BACKUP_USER` | Dono do `~/.config/rclone/rclone.conf` |
+
+## Upload parcial (madrugada)
+
+Para bibliotecas grandes (~100+ GiB), o rclone sobe **só na janela** e **retoma** na noite seguinte (sync idempotente):
+
+```text
+00:00  timer dispara → backup-cloud.sh
+       └── rclone --max-duration até 06:00
+06:00  para (packs já enviados ficam no Drive)
+00:00  (dia seguinte) continua do que faltou
+```
+
+Na config:
+
+```bash
+BACKUP_WINDOW_ENABLED=true
+BACKUP_WINDOW_START="00:00"
+BACKUP_WINDOW_END="06:00"
+BACKUP_SCHEDULE="*-*-* 00:00:00"
+```
+
+Forçar fora da janela:
+
+```bash
+sudo ./backup-cloud.sh --ignore-window
+```
 
 ## Agendamento
 
@@ -125,6 +154,8 @@ Rodar na hora:
 
 ```bash
 sudo systemctl start music-server-cloud-backup.service
+# ou:
+sudo ./backup-cloud.sh --ignore-window
 ```
 
 Desativar:

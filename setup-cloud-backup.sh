@@ -174,8 +174,30 @@ write_cloud_conf() {
   RCLONE_MODE="$(prompt_input "Modo rclone (copy/sync)" "${mode_default}")"
   [[ "${RCLONE_MODE}" != "sync" ]] && RCLONE_MODE="copy"
 
-  local schedule_default="*-*-* 03:00:00"
-  BACKUP_SCHEDULE="$(prompt_input "Horário diário (OnCalendar)" "${schedule_default}")"
+  echo
+  echo -e "${C_BOLD}Janela horária (upload parcial)${C_RESET}"
+  echo -e "${C_DIM}Útil para ~100+ GiB no Google Drive: sobe só de madrugada e retoma no dia seguinte.${C_RESET}"
+  if confirm "Limitar upload a uma janela horária (ex.: 00:00–06:00)?" "S"; then
+    BACKUP_WINDOW_ENABLED=true
+    BACKUP_WINDOW_START="$(prompt_input "Início da janela (HH:MM)" "00:00")"
+    BACKUP_WINDOW_END="$(prompt_input "Fim da janela (HH:MM)" "06:00")"
+    [[ -z "${BACKUP_WINDOW_START}" ]] && BACKUP_WINDOW_START="00:00"
+    [[ -z "${BACKUP_WINDOW_END}" ]] && BACKUP_WINDOW_END="06:00"
+    schedule_default="*-*-* ${BACKUP_WINDOW_START}:00"
+    # OnCalendar quer HH:MM:SS
+    if [[ "${BACKUP_WINDOW_START}" =~ ^[0-9]{1,2}:[0-9]{2}$ ]]; then
+      schedule_default="*-*-* ${BACKUP_WINDOW_START}:00"
+    else
+      schedule_default="*-*-* 00:00:00"
+    fi
+  else
+    BACKUP_WINDOW_ENABLED=false
+    BACKUP_WINDOW_START="00:00"
+    BACKUP_WINDOW_END="06:00"
+    schedule_default="*-*-* 03:00:00"
+  fi
+
+  BACKUP_SCHEDULE="$(prompt_input "Horário do timer (OnCalendar)" "${schedule_default}")"
   [[ -z "${BACKUP_SCHEDULE}" ]] && BACKUP_SCHEDULE="${schedule_default}"
 
   if [[ -f "${TEMPLATE}" ]]; then
@@ -202,6 +224,10 @@ write_cloud_conf() {
   _set_conf BACKUP_PAYLOAD "${BACKUP_PAYLOAD}"
   _set_conf RCLONE_MODE "${RCLONE_MODE}"
   _set_conf BACKUP_SCHEDULE "${BACKUP_SCHEDULE}"
+  _set_conf BACKUP_WINDOW_ENABLED "${BACKUP_WINDOW_ENABLED}"
+  _set_conf BACKUP_WINDOW_START "${BACKUP_WINDOW_START}"
+  _set_conf BACKUP_WINDOW_END "${BACKUP_WINDOW_END}"
+  _set_conf BACKUP_MAX_DURATION ""
   _set_conf BACKUP_USER "${BACKUP_USER}"
   _set_conf BACKUP_MUSIC "true"
   _set_conf BACKUP_PHOTOS "true"
@@ -239,6 +265,12 @@ install_systemd_timer() {
   # shellcheck source=/dev/null
   source "${CLOUD_CONF}"
 
+  local timeout="infinity"
+  if [[ "${BACKUP_WINDOW_ENABLED:-false}" == "true" ]]; then
+    # Folga além da janela (rclone --max-duration + transfers em voo)
+    timeout="7h"
+  fi
+
   cat > /etc/systemd/system/music-server-cloud-backup.service <<EOF
 [Unit]
 Description=Music Server — backup HD externo para nuvem (rclone)
@@ -251,19 +283,25 @@ ExecStart=${script}
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+TimeoutStartSec=${timeout}
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  local delay="10m"
+  if [[ "${BACKUP_WINDOW_ENABLED:-false}" == "true" ]]; then
+    delay="2m"
+  fi
 
   cat > /etc/systemd/system/music-server-cloud-backup.timer <<EOF
 [Unit]
 Description=Timer diário — backup HD → nuvem
 
 [Timer]
-OnCalendar=${BACKUP_SCHEDULE:-*-*-* 03:00:00}
+OnCalendar=${BACKUP_SCHEDULE:-*-*-* 00:00:00}
 Persistent=true
-RandomizedDelaySec=10m
+RandomizedDelaySec=${delay}
 
 [Install]
 WantedBy=timers.target
@@ -272,6 +310,9 @@ EOF
   systemctl daemon-reload
   systemctl enable --now music-server-cloud-backup.timer
   log_ok "Timer ativo: music-server-cloud-backup.timer (${BACKUP_SCHEDULE})"
+  if [[ "${BACKUP_WINDOW_ENABLED:-false}" == "true" ]]; then
+    log_info "Janela: ${BACKUP_WINDOW_START:-00:00}–${BACKUP_WINDOW_END:-06:00} (upload parcial; retoma no dia seguinte)"
+  fi
   systemctl list-timers music-server-cloud-backup.timer --no-pager 2>/dev/null || true
 }
 
@@ -317,6 +358,7 @@ main() {
   echo -e "${C_DIM}Dry-run:    sudo ./backup-cloud.sh --dry-run${C_RESET}"
   echo -e "${C_DIM}Só restic:  sudo ./backup-cloud.sh --payload restic${C_RESET}"
   echo -e "${C_DIM}Só zip:     sudo ./backup-cloud.sh --payload zip${C_RESET}"
+  echo -e "${C_DIM}Forçar agora: sudo ./backup-cloud.sh --ignore-window${C_RESET}"
   echo -e "${C_DIM}Config:     ${CLOUD_CONF}${C_RESET}"
   echo -e "${C_DIM}Logs:       ${STATE_DIR}/logs/${C_RESET}"
   echo -e "${C_DIM}Timer:      systemctl status music-server-cloud-backup.timer${C_RESET}"

@@ -20,6 +20,7 @@ DRY_RUN=false
 MUSIC_ONLY=false
 PHOTOS_ONLY=false
 PAYLOAD_OVERRIDE=""
+IGNORE_WINDOW=false
 
 usage() {
   cat <<EOF
@@ -36,6 +37,7 @@ Opções:
   --payload restic|zip   Sobrescreve BACKUP_PAYLOAD da config
   --music-only           Só biblioteca de músicas (modo zip)
   --photos-only          Só pasta de fotos (modo zip)
+  --ignore-window        Ignora janela horária (BACKUP_WINDOW_*)
   -h, --help             Esta ajuda
 
 Configure antes com: sudo ./setup-cloud-backup.sh
@@ -47,6 +49,7 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) DRY_RUN=true; shift ;;
+      --ignore-window) IGNORE_WINDOW=true; shift ;;
       --payload)
         [[ $# -ge 2 ]] || die "--payload requer restic ou zip"
         PAYLOAD_OVERRIDE="$2"
@@ -87,6 +90,13 @@ Execute: sudo ./setup-cloud-backup.sh"
   ZIP_KEEP_LOCAL="${ZIP_KEEP_LOCAL:-1}"
   ZIP_KEEP_REMOTE="${ZIP_KEEP_REMOTE:-3}"
   ZIP_COMPRESSION="${ZIP_COMPRESSION:-0}"
+
+  # Janela horária (ex.: só madrugada 00:00–06:00); rclone retoma na próxima noite
+  BACKUP_WINDOW_ENABLED="${BACKUP_WINDOW_ENABLED:-false}"
+  BACKUP_WINDOW_START="${BACKUP_WINDOW_START:-00:00}"
+  BACKUP_WINDOW_END="${BACKUP_WINDOW_END:-06:00}"
+  # Duração máxima calculada até o fim da janela; sobrescreva se quiser fixo (ex.: 6h)
+  BACKUP_MAX_DURATION="${BACKUP_MAX_DURATION:-}"
 }
 
 resolve_paths() {
@@ -131,6 +141,7 @@ ensure_mount_ready() {
 
 # Como executar o rclone: user (OAuth como BACKUP_USER) | root (lê repo restic 700)
 RCLONE_RUN_MODE="${RCLONE_RUN_MODE:-user}"
+RCLONE_MAX_DURATION_ARGS=()
 
 rclone_backup_user() {
   local backup_user="${BACKUP_USER:-}"
@@ -198,6 +209,101 @@ rclone_exec() {
   esac
 }
 
+# HH:MM → minutos desde 00:00
+_hhmm_to_minutes() {
+  local t="$1"
+  local h m
+  if ! [[ "${t}" =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+    die "Horário inválido (use HH:MM): ${t}"
+  fi
+  h="${BASH_REMATCH[1]}"
+  m="${BASH_REMATCH[2]}"
+  h=$((10#${h}))
+  m=$((10#${m}))
+  if (( h > 23 || m > 59 )); then
+    die "Horário fora do intervalo: ${t}"
+  fi
+  echo $((h * 60 + m))
+}
+
+# true se agora está dentro de [START, END); janela que cruza meia-noite (ex. 22:00–06:00) ok
+in_backup_window() {
+  local now start_m end_m
+  now="$(date +%H:%M)"
+  start_m="$(_hhmm_to_minutes "${BACKUP_WINDOW_START}")"
+  end_m="$(_hhmm_to_minutes "${BACKUP_WINDOW_END}")"
+  local now_m
+  now_m="$(_hhmm_to_minutes "${now}")"
+
+  if (( start_m == end_m )); then
+    return 0  # janela de 24h
+  fi
+  if (( start_m < end_m )); then
+    # ex.: 00:00–06:00
+    (( now_m >= start_m && now_m < end_m ))
+  else
+    # ex.: 22:00–06:00
+    (( now_m >= start_m || now_m < end_m ))
+  fi
+}
+
+# segundos até BACKUP_WINDOW_END (mínimo 60s)
+seconds_until_window_end() {
+  local now_m end_m start_m
+  now_m="$(_hhmm_to_minutes "$(date +%H:%M)")"
+  end_m="$(_hhmm_to_minutes "${BACKUP_WINDOW_END}")"
+  start_m="$(_hhmm_to_minutes "${BACKUP_WINDOW_START}")"
+
+  local remain_m
+  if (( start_m < end_m )); then
+    remain_m=$((end_m - now_m))
+  else
+    # cruza meia-noite
+    if (( now_m >= start_m )); then
+      remain_m=$((24 * 60 - now_m + end_m))
+    else
+      remain_m=$((end_m - now_m))
+    fi
+  fi
+  if (( remain_m < 1 )); then
+    remain_m=1
+  fi
+  echo $((remain_m * 60))
+}
+
+enforce_backup_window() {
+  if [[ "${BACKUP_WINDOW_ENABLED}" != "true" || "${IGNORE_WINDOW}" == "true" ]]; then
+    RCLONE_MAX_DURATION_ARGS=()
+    return 0
+  fi
+
+  if ! in_backup_window; then
+    log_warn "Fora da janela ${BACKUP_WINDOW_START}–${BACKUP_WINDOW_END} (agora $(date +%H:%M))"
+    log_info "O timer retoma dentro da janela. Force com: sudo ./backup-cloud.sh --ignore-window"
+    exit 0
+  fi
+
+  local dur="${BACKUP_MAX_DURATION}"
+  if [[ -z "${dur}" ]]; then
+    dur="$(seconds_until_window_end)s"
+  fi
+  RCLONE_MAX_DURATION_ARGS=(--max-duration "${dur}" --cutoff-mode soft)
+  log_info "Janela ${BACKUP_WINDOW_START}–${BACKUP_WINDOW_END}: rclone para em --max-duration ${dur} (retoma depois)"
+}
+
+# true se o exit do rclone foi só limite de duração/transferência (progresso parcial ok)
+rclone_partial_ok() {
+  local rc="$1"
+  local log_file="$2"
+  case "${rc}" in
+    8|10) return 0 ;;  # max transfer / max duration (versões recentes)
+  esac
+  if [[ -f "${log_file}" ]] && grep -qE 'max transfer duration reached|MaxDurationReached|max transfer limit reached' "${log_file}"; then
+    return 0
+  fi
+  return 1
+}
+
 run_rclone_transfer() {
   local label="$1"
   local src="$2"
@@ -232,6 +338,10 @@ run_rclone_transfer() {
   local extra=( ${RCLONE_EXTRA_OPTS} )
   args+=("${extra[@]}")
 
+  if [[ ${#RCLONE_MAX_DURATION_ARGS[@]} -gt 0 ]]; then
+    args+=("${RCLONE_MAX_DURATION_ARGS[@]}")
+  fi
+
   local ex
   for ex in "${excludes[@]}"; do
     args+=(--exclude "${ex}")
@@ -244,12 +354,21 @@ run_rclone_transfer() {
     log_step "Upload ${label}: ${src} → ${dest}"
   fi
 
-  if rclone_exec "${args[@]}"; then
+  set +e
+  rclone_exec "${args[@]}"
+  local rc=$?
+  set -e
+
+  if [[ "${rc}" -eq 0 ]]; then
     log_ok "${label} concluído (log: ${log_file})"
-  else
-    log_error "${label} falhou — veja ${log_file}"
-    return 1
+    return 0
   fi
+  if rclone_partial_ok "${rc}" "${log_file}"; then
+    log_ok "${label}: janela/duração esgotada — progresso mantido; continua na próxima execução"
+    return 0
+  fi
+  log_error "${label} falhou (rc=${rc}) — veja ${log_file}"
+  return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -503,11 +622,16 @@ Use restic (recomendado) ou zip. Edite: ${CLOUD_CONF}"
   echo -e "  Remote:   ${RCLONE_REMOTE}:${RCLONE_PATH}"
   echo -e "  Payload:  ${BACKUP_PAYLOAD}"
   echo -e "  Modo:     ${RCLONE_MODE}"
+  if [[ "${BACKUP_WINDOW_ENABLED}" == "true" ]]; then
+    echo -e "  Janela:   ${BACKUP_WINDOW_START}–${BACKUP_WINDOW_END}$([[ "${IGNORE_WINDOW}" == "true" ]] && echo ' (ignorada)')"
+  fi
   if [[ "${BACKUP_PAYLOAD}" == "zip" ]]; then
     echo -e "  Músicas:  ${BACKUP_MUSIC} (${MUSIC_ROOT})"
     echo -e "  Fotos:    ${BACKUP_PHOTOS} (${PHOTOS_ROOT})"
   fi
   echo
+
+  enforce_backup_window
 
   if ! rclone_as_user lsd "${RCLONE_REMOTE}:" >/dev/null 2>&1; then
     die "Não foi possível listar ${RCLONE_REMOTE}: — rode rclone config como ${BACKUP_USER:-$TARGET_USER}"
