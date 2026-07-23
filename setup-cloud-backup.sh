@@ -18,19 +18,22 @@ Instala rclone, guia a conta na nuvem (Google Drive, etc.) e agenda
 backup diário do HD externo via systemd timer.
 
 Opções:
-  -y, --yes       Confirmar automaticamente quando possível
-  --no-timer      Não instalar o timer systemd
-  -h, --help      Esta ajuda
+  -y, --yes          Confirmar automaticamente quando possível
+  --no-timer         Não instalar o timer systemd
+  --refresh-timer    Só atualiza conf (janela/rate-limit) + reinstala o timer
+  -h, --help         Esta ajuda
 EOF
 }
 
 INSTALL_TIMER=true
+REFRESH_TIMER_ONLY=false
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -y|--yes) ASSUME_YES=true; shift ;;
       --no-timer) INSTALL_TIMER=false; shift ;;
+      --refresh-timer) REFRESH_TIMER_ONLY=true; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "Opção desconhecida: $1" ;;
     esac
@@ -176,23 +179,23 @@ write_cloud_conf() {
 
   echo
   echo -e "${C_BOLD}Janela horária (upload parcial)${C_RESET}"
-  echo -e "${C_DIM}Útil para ~100+ GiB no Google Drive: sobe só de madrugada e retoma no dia seguinte.${C_RESET}"
-  if confirm "Limitar upload a uma janela horária (ex.: 00:00–06:00)?" "S"; then
+  echo -e "${C_DIM}Útil para ~100+ GiB no Google Drive: sobe só à noite/madrugada e retoma no dia seguinte.${C_RESET}"
+  if confirm "Limitar upload a uma janela horária (ex.: 17:00–06:00)?" "S"; then
     BACKUP_WINDOW_ENABLED=true
-    BACKUP_WINDOW_START="$(prompt_input "Início da janela (HH:MM)" "00:00")"
+    BACKUP_WINDOW_START="$(prompt_input "Início da janela (HH:MM)" "17:00")"
     BACKUP_WINDOW_END="$(prompt_input "Fim da janela (HH:MM)" "06:00")"
-    [[ -z "${BACKUP_WINDOW_START}" ]] && BACKUP_WINDOW_START="00:00"
+    [[ -z "${BACKUP_WINDOW_START}" ]] && BACKUP_WINDOW_START="17:00"
     [[ -z "${BACKUP_WINDOW_END}" ]] && BACKUP_WINDOW_END="06:00"
     schedule_default="*-*-* ${BACKUP_WINDOW_START}:00"
     # OnCalendar quer HH:MM:SS
     if [[ "${BACKUP_WINDOW_START}" =~ ^[0-9]{1,2}:[0-9]{2}$ ]]; then
       schedule_default="*-*-* ${BACKUP_WINDOW_START}:00"
     else
-      schedule_default="*-*-* 00:00:00"
+      schedule_default="*-*-* 17:00:00"
     fi
   else
     BACKUP_WINDOW_ENABLED=false
-    BACKUP_WINDOW_START="00:00"
+    BACKUP_WINDOW_START="17:00"
     BACKUP_WINDOW_END="06:00"
     schedule_default="*-*-* 03:00:00"
   fi
@@ -239,6 +242,13 @@ write_cloud_conf() {
   _set_conf ZIP_KEEP_REMOTE "3"
   _set_conf ZIP_COMPRESSION "0"
   _set_conf BACKUP_LOG_DIR "${STATE_DIR}/logs"
+  _set_conf RCLONE_TRANSFERS "2"
+  _set_conf RCLONE_CHECKERS "4"
+  _set_conf RCLONE_TPSLIMIT "4"
+  _set_conf RCLONE_TPSLIMIT_BURST "1"
+  _set_conf RCLONE_DRIVE_PACER_MIN_SLEEP "200ms"
+  _set_conf RCLONE_RETRIES_SLEEP "30s"
+  _set_conf RCLONE_EXTRA_OPTS "--fast-list --retries 5 --low-level-retries 10"
 
   chmod 600 "${CLOUD_CONF}"
   log_ok "Config salva em ${CLOUD_CONF}"
@@ -265,10 +275,22 @@ install_systemd_timer() {
   # shellcheck source=/dev/null
   source "${CLOUD_CONF}"
 
+  # Timeout = duração da janela + 1h de folga (rclone --max-duration + transfers em voo)
   local timeout="infinity"
   if [[ "${BACKUP_WINDOW_ENABLED:-false}" == "true" ]]; then
-    # Folga além da janela (rclone --max-duration + transfers em voo)
-    timeout="7h"
+    local start_m end_m remain_m hours
+    start_m="$(_hhmm_to_minutes_setup "${BACKUP_WINDOW_START:-17:00}")"
+    end_m="$(_hhmm_to_minutes_setup "${BACKUP_WINDOW_END:-06:00}")"
+    if (( start_m == end_m )); then
+      remain_m=$((24 * 60))
+    elif (( start_m < end_m )); then
+      remain_m=$((end_m - start_m))
+    else
+      remain_m=$((24 * 60 - start_m + end_m))
+    fi
+    hours=$((remain_m / 60 + 1))
+    (( hours < 2 )) && hours=2
+    timeout="${hours}h"
   fi
 
   cat > /etc/systemd/system/music-server-cloud-backup.service <<EOF
@@ -299,7 +321,7 @@ EOF
 Description=Timer diário — backup HD → nuvem
 
 [Timer]
-OnCalendar=${BACKUP_SCHEDULE:-*-*-* 00:00:00}
+OnCalendar=${BACKUP_SCHEDULE:-*-*-* 17:00:00}
 Persistent=true
 RandomizedDelaySec=${delay}
 
@@ -311,15 +333,81 @@ EOF
   systemctl enable --now music-server-cloud-backup.timer
   log_ok "Timer ativo: music-server-cloud-backup.timer (${BACKUP_SCHEDULE})"
   if [[ "${BACKUP_WINDOW_ENABLED:-false}" == "true" ]]; then
-    log_info "Janela: ${BACKUP_WINDOW_START:-00:00}–${BACKUP_WINDOW_END:-06:00} (upload parcial; retoma no dia seguinte)"
+    log_info "Janela: ${BACKUP_WINDOW_START:-17:00}–${BACKUP_WINDOW_END:-06:00} (upload parcial; retoma no dia seguinte)"
+    log_info "Timeout systemd: ${timeout}"
   fi
   systemctl list-timers music-server-cloud-backup.timer --no-pager 2>/dev/null || true
+}
+
+# HH:MM → minutos (helper local do setup; espelha backup-cloud.sh)
+_hhmm_to_minutes_setup() {
+  local t="$1"
+  local h m
+  if ! [[ "${t}" =~ ^([0-9]{1,2}):([0-9]{2})$ ]]; then
+    echo 0
+    return 0
+  fi
+  h="${BASH_REMATCH[1]}"
+  m="${BASH_REMATCH[2]}"
+  h=$((10#${h}))
+  m=$((10#${m}))
+  echo $((h * 60 + m))
+}
+
+# Atualiza janela 17:00–06:00 + rate-limit na conf existente (sem reconfigurar remote)
+refresh_window_and_rate_limit() {
+  if [[ ! -f "${CLOUD_CONF}" ]]; then
+    die "Config não encontrada: ${CLOUD_CONF}
+Execute o setup completo primeiro: sudo ./setup-cloud-backup.sh"
+  fi
+
+  _set_conf() {
+    local key="$1" val="$2"
+    local escaped
+    escaped="$(printf '%s' "${val}" | sed 's/[|&]/\\&/g')"
+    if grep -qE "^${key}=" "${CLOUD_CONF}"; then
+      sed -i "s|^${key}=.*|${key}=\"${escaped}\"|" "${CLOUD_CONF}"
+    else
+      echo "${key}=\"${val}\"" >> "${CLOUD_CONF}"
+    fi
+  }
+
+  log_step "Atualizando janela e rate-limit em ${CLOUD_CONF}"
+  _set_conf BACKUP_WINDOW_ENABLED "true"
+  _set_conf BACKUP_WINDOW_START "17:00"
+  _set_conf BACKUP_WINDOW_END "06:00"
+  _set_conf BACKUP_SCHEDULE "*-*-* 17:00:00"
+  _set_conf BACKUP_MAX_DURATION ""
+  _set_conf RCLONE_TRANSFERS "2"
+  _set_conf RCLONE_CHECKERS "4"
+  _set_conf RCLONE_TPSLIMIT "4"
+  _set_conf RCLONE_TPSLIMIT_BURST "1"
+  _set_conf RCLONE_DRIVE_PACER_MIN_SLEEP "200ms"
+  _set_conf RCLONE_RETRIES_SLEEP "30s"
+  # Remove transfers/tpslimit antigos de EXTRA_OPTS (agora vêm das chaves acima)
+  _set_conf RCLONE_EXTRA_OPTS "--fast-list --retries 5 --low-level-retries 10"
+  chmod 600 "${CLOUD_CONF}"
+  log_ok "Janela 17:00–06:00 + rate-limit aplicados"
 }
 
 main() {
   parse_args "$@"
   require_root
   print_banner
+
+  if [[ "${REFRESH_TIMER_ONLY}" == "true" ]]; then
+    echo -e "${C_BOLD}Refresh timer / janela / rate-limit${C_RESET}"
+    echo
+    refresh_window_and_rate_limit
+    install_systemd_timer
+    echo
+    log_ok "Timer atualizado"
+    echo -e "${C_DIM}Próximo disparo:${C_RESET}"
+    systemctl list-timers music-server-cloud-backup.timer --no-pager 2>/dev/null || true
+    echo -e "${C_DIM}Config: ${CLOUD_CONF}${C_RESET}"
+    echo
+    return 0
+  fi
 
   echo -e "${C_BOLD}Setup backup na nuvem (rclone)${C_RESET}"
   echo
@@ -359,6 +447,7 @@ main() {
   echo -e "${C_DIM}Só restic:  sudo ./backup-cloud.sh --payload restic${C_RESET}"
   echo -e "${C_DIM}Só zip:     sudo ./backup-cloud.sh --payload zip${C_RESET}"
   echo -e "${C_DIM}Forçar agora: sudo ./backup-cloud.sh --ignore-window${C_RESET}"
+  echo -e "${C_DIM}Refresh timer: sudo ./setup-cloud-backup.sh --refresh-timer${C_RESET}"
   echo -e "${C_DIM}Config:     ${CLOUD_CONF}${C_RESET}"
   echo -e "${C_DIM}Logs:       ${STATE_DIR}/logs/${C_RESET}"
   echo -e "${C_DIM}Timer:      systemctl status music-server-cloud-backup.timer${C_RESET}"

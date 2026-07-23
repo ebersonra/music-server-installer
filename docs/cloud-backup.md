@@ -110,30 +110,34 @@ sudo nano /var/lib/music-server-installer/cloud-backup.conf
 | `RESTIC_CLOUD_SUBDIR` | Subpasta do repo na nuvem |
 | `ZIP_KEEP_REMOTE` | Quantos zips datados manter na nuvem |
 | `ZIP_COMPRESSION` | `0`–`9` (use `0` para mídia) |
-| `BACKUP_SCHEDULE` | Horário do timer (`*-*-* 00:00:00` com janela noturna) |
+| `BACKUP_SCHEDULE` | Horário do timer (`*-*-* 17:00:00` com janela noturna) |
 | `BACKUP_WINDOW_ENABLED` | `true` = só sobe dentro da janela |
-| `BACKUP_WINDOW_START` / `END` | Ex.: `00:00` / `06:00` |
-| `BACKUP_MAX_DURATION` | Opcional (ex.: `6h`); vazio = até o fim da janela |
+| `BACKUP_WINDOW_START` / `END` | Ex.: `17:00` / `06:00` |
+| `BACKUP_MAX_DURATION` | Opcional (ex.: `13h`); vazio = até o fim da janela |
 | `BACKUP_USER` | Dono do `~/.config/rclone/rclone.conf` |
+| `RCLONE_TRANSFERS` / `CHECKERS` | Paralelismo (padrão `2` / `4` — gentil com o Drive) |
+| `RCLONE_TPSLIMIT` / `BURST` | Limite de requisições/s (padrão `4` / `1`) |
+| `RCLONE_DRIVE_PACER_MIN_SLEEP` | Delay mínimo entre calls da API Drive (padrão `200ms`) |
+| `RCLONE_RETRIES_SLEEP` | Espera entre retries após rate limit (padrão `30s`) |
 
-## Upload parcial (madrugada)
+## Upload parcial (noite / madrugada)
 
 Para bibliotecas grandes (~100+ GiB), o rclone sobe **só na janela** e **retoma** na noite seguinte (sync idempotente):
 
 ```text
-00:00  timer dispara → backup-cloud.sh
+17:00  timer dispara → backup-cloud.sh
        └── rclone --max-duration até 06:00
 06:00  para (packs já enviados ficam no Drive)
-00:00  (dia seguinte) continua do que faltou
+17:00  (dia seguinte) continua do que faltou
 ```
 
 Na config:
 
 ```bash
 BACKUP_WINDOW_ENABLED=true
-BACKUP_WINDOW_START="00:00"
+BACKUP_WINDOW_START="17:00"
 BACKUP_WINDOW_END="06:00"
-BACKUP_SCHEDULE="*-*-* 00:00:00"
+BACKUP_SCHEDULE="*-*-* 17:00:00"
 ```
 
 Forçar fora da janela:
@@ -141,6 +145,21 @@ Forçar fora da janela:
 ```bash
 sudo ./backup-cloud.sh --ignore-window
 ```
+
+## Rate limit (Google Drive)
+
+O script aplica delay e paralelismo baixo para evitar `User rate limit exceeded` e longas pausas em `0 B/s`:
+
+```bash
+RCLONE_TRANSFERS=2
+RCLONE_CHECKERS=4
+RCLONE_TPSLIMIT=4
+RCLONE_TPSLIMIT_BURST=1
+RCLONE_DRIVE_PACER_MIN_SLEEP="200ms"
+RCLONE_RETRIES_SLEEP="30s"
+```
+
+Se ainda houver throttle forte, reduza `RCLONE_TPSLIMIT` para `2` e suba o pacer para `500ms`.
 
 ## Agendamento
 
@@ -216,10 +235,14 @@ sudo ./backup-cloud.sh --payload zip
 ```
 
 **Rate limit Google (`User rate limit exceeded`)**  
-Na config, reduza transfers / tpslimit:
+Reduza TPS / aumente o delay do pacer na config:
 
 ```bash
-RCLONE_EXTRA_OPTS="--fast-list --checkers 4 --transfers 2 --tpslimit 5 --retries 5"
+RCLONE_TRANSFERS=2
+RCLONE_CHECKERS=4
+RCLONE_TPSLIMIT=2
+RCLONE_DRIVE_PACER_MIN_SLEEP="500ms"
+RCLONE_RETRIES_SLEEP="60s"
 ```
 
 **Aviso `shared Google Drive client_id`**  

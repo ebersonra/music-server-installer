@@ -79,7 +79,15 @@ Execute: sudo ./setup-cloud-backup.sh"
   BACKUP_PHOTOS="${BACKUP_PHOTOS:-true}"
   BACKUP_DOWNLOADS="${BACKUP_DOWNLOADS:-false}"
   BACKUP_LOG_DIR="${BACKUP_LOG_DIR:-${STATE_DIR}/logs}"
-  RCLONE_EXTRA_OPTS="${RCLONE_EXTRA_OPTS:---fast-list --checkers 8 --transfers 4 --tpslimit 8}"
+  RCLONE_EXTRA_OPTS="${RCLONE_EXTRA_OPTS:---fast-list --retries 5 --low-level-retries 10}"
+
+  # Rate limit (Google Drive / APIs sensíveis) — delay entre requests + paralelismo baixo
+  RCLONE_TRANSFERS="${RCLONE_TRANSFERS:-2}"
+  RCLONE_CHECKERS="${RCLONE_CHECKERS:-4}"
+  RCLONE_TPSLIMIT="${RCLONE_TPSLIMIT:-4}"
+  RCLONE_TPSLIMIT_BURST="${RCLONE_TPSLIMIT_BURST:-1}"
+  RCLONE_DRIVE_PACER_MIN_SLEEP="${RCLONE_DRIVE_PACER_MIN_SLEEP:-200ms}"
+  RCLONE_RETRIES_SLEEP="${RCLONE_RETRIES_SLEEP:-30s}"
 
   # Modo restic
   RUN_RESTIC_FIRST="${RUN_RESTIC_FIRST:-true}"
@@ -91,11 +99,11 @@ Execute: sudo ./setup-cloud-backup.sh"
   ZIP_KEEP_REMOTE="${ZIP_KEEP_REMOTE:-3}"
   ZIP_COMPRESSION="${ZIP_COMPRESSION:-0}"
 
-  # Janela horária (ex.: só madrugada 00:00–06:00); rclone retoma na próxima noite
+  # Janela horária (ex.: 17:00–06:00); rclone retoma na próxima noite
   BACKUP_WINDOW_ENABLED="${BACKUP_WINDOW_ENABLED:-false}"
-  BACKUP_WINDOW_START="${BACKUP_WINDOW_START:-00:00}"
+  BACKUP_WINDOW_START="${BACKUP_WINDOW_START:-17:00}"
   BACKUP_WINDOW_END="${BACKUP_WINDOW_END:-06:00}"
-  # Duração máxima calculada até o fim da janela; sobrescreva se quiser fixo (ex.: 6h)
+  # Duração máxima calculada até o fim da janela; sobrescreva se quiser fixo (ex.: 13h)
   BACKUP_MAX_DURATION="${BACKUP_MAX_DURATION:-}"
 }
 
@@ -291,6 +299,20 @@ enforce_backup_window() {
   log_info "Janela ${BACKUP_WINDOW_START}–${BACKUP_WINDOW_END}: rclone para em --max-duration ${dur} (retoma depois)"
 }
 
+# Flags de rate-limit / delay (respeitam throttle do Google Drive)
+rclone_rate_limit_args() {
+  local args=()
+  [[ -n "${RCLONE_TRANSFERS}" ]] && args+=(--transfers "${RCLONE_TRANSFERS}")
+  [[ -n "${RCLONE_CHECKERS}" ]] && args+=(--checkers "${RCLONE_CHECKERS}")
+  [[ -n "${RCLONE_TPSLIMIT}" ]] && args+=(--tpslimit "${RCLONE_TPSLIMIT}")
+  [[ -n "${RCLONE_TPSLIMIT_BURST}" ]] && args+=(--tpslimit-burst "${RCLONE_TPSLIMIT_BURST}")
+  [[ -n "${RCLONE_DRIVE_PACER_MIN_SLEEP}" ]] && args+=(--drive-pacer-min-sleep "${RCLONE_DRIVE_PACER_MIN_SLEEP}")
+  [[ -n "${RCLONE_RETRIES_SLEEP}" ]] && args+=(--retries-sleep "${RCLONE_RETRIES_SLEEP}")
+  if [[ ${#args[@]} -gt 0 ]]; then
+    printf '%s\n' "${args[@]}"
+  fi
+}
+
 # true se o exit do rclone foi só limite de duração/transferência (progresso parcial ok)
 rclone_partial_ok() {
   local rc="$1"
@@ -337,6 +359,13 @@ run_rclone_transfer() {
   # shellcheck disable=SC2206
   local extra=( ${RCLONE_EXTRA_OPTS} )
   args+=("${extra[@]}")
+
+  local rate_args=()
+  mapfile -t rate_args < <(rclone_rate_limit_args)
+  if [[ ${#rate_args[@]} -gt 0 ]]; then
+    args+=("${rate_args[@]}")
+    log_info "Rate-limit: transfers=${RCLONE_TRANSFERS} checkers=${RCLONE_CHECKERS} tpslimit=${RCLONE_TPSLIMIT} burst=${RCLONE_TPSLIMIT_BURST} pacer=${RCLONE_DRIVE_PACER_MIN_SLEEP} retries-sleep=${RCLONE_RETRIES_SLEEP}"
+  fi
 
   if [[ ${#RCLONE_MAX_DURATION_ARGS[@]} -gt 0 ]]; then
     args+=("${RCLONE_MAX_DURATION_ARGS[@]}")
