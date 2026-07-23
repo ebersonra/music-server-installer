@@ -194,9 +194,10 @@ O instalador detecta via `lsblk` + `blkid`/`udevadm`. Se falhar, use a opção `
 sudo ./mount.sh          # remonta usando o estado salvo
 sudo ./mount.sh -i       # escolher disco de novo
 ```
-Mount fantasma antigo:
+Mount fantasma / FUSE morto (`Ponto final de transporte não está conectado`):
 ```bash
 sudo ./reset-mount.sh
+# reconecte o cabo USB se necessário
 sudo ./mount.sh
 ```
 Prefira montar em `/media/music` (paths: `/media/music/Musicas`, `/media/music/Fotos`).

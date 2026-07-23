@@ -78,6 +78,90 @@ validate_mount_point() {
   fi
 }
 
+# FUSE/NTFS morto: findmnt ainda lista, mas stat/ls falham com
+# "Ponto final de transporte não está conectado" / ENOTCONN
+mount_point_is_stale() {
+  local mp="$1"
+  local err
+  if ! findmnt -n "${mp}" &>/dev/null; then
+    return 1
+  fi
+  err="$(stat "${mp}" 2>&1 >/dev/null || true)"
+  if [[ "${err}" == *"Transport endpoint is not connected"* ]] || \
+     [[ "${err}" == *"Ponto final de transporte"* ]] || \
+     [[ "${err}" == *"Não está conectado"* ]]; then
+    return 0
+  fi
+  # Device sumiu mas findmnt ainda aponta
+  local src
+  src="$(findmnt -n -o SOURCE "${mp}" 2>/dev/null | awk '{print $1}')"
+  if [[ -n "${src}" && ! -b "${src}" && ! -e "${src}" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+clear_stale_mount_point() {
+  local mp="$1"
+  if ! findmnt -n "${mp}" &>/dev/null && [[ -d "${mp}" ]]; then
+    return 0
+  fi
+  if mount_point_is_stale "${mp}"; then
+    local src
+    src="$(findmnt -n -o SOURCE "${mp}" 2>/dev/null | awk '{print $1}' || true)"
+    log_warn "Mount morto/fantasma em ${mp}${src:+ (${src})} — desmontando (lazy)"
+    umount -l "${mp}" 2>/dev/null || umount "${mp}" 2>/dev/null \
+      || die "Não foi possível limpar mount morto em ${mp}. Tente: sudo ./reset-mount.sh"
+    # Aguardar o kernel liberar o dentry
+    local i
+    for i in 1 2 3 4 5; do
+      if ! findmnt -n "${mp}" &>/dev/null && stat "${mp}" &>/dev/null; then
+        break
+      fi
+      if ! findmnt -n "${mp}" &>/dev/null; then
+        # diretório pode não existir ainda — ok
+        break
+      fi
+      sleep 0.4
+    done
+    log_ok "Mount morto removido de ${mp}"
+  fi
+}
+
+# true se arquivos no NTFS aparecem como TARGET_UID (uid= do ntfs-3g)
+ntfs_mount_has_expected_owner() {
+  local mp="$1"
+  local st_uid
+  [[ -n "${TARGET_UID:-}" ]] || return 1
+  findmnt -n "${mp}" &>/dev/null || return 1
+  st_uid="$(stat -c '%u' "${mp}" 2>/dev/null || echo "")"
+  [[ "${st_uid}" == "${TARGET_UID}" ]]
+}
+
+# Monta NTFS com ownership do usuário (ntfs-3g direto; remount não aplica uid/gid)
+mount_ntfs_with_ownership() {
+  local device="$1"
+  local mp="$2"
+  local opts="$3"
+
+  log_info "Montando NTFS: ntfs-3g -o ${opts}"
+  if command -v ntfs-3g >/dev/null 2>&1; then
+    if ntfs-3g -o "${opts}" "${device}" "${mp}"; then
+      return 0
+    fi
+    log_warn "ntfs-3g direto falhou — tentando mount -t ntfs-3g"
+  fi
+  if mount -t ntfs-3g -o "${opts}" "${device}" "${mp}"; then
+    return 0
+  fi
+  # Fallback kernel ntfs3
+  local uid gid
+  uid="$(echo "${opts}" | sed -n 's/.*uid=\([0-9]*\).*/\1/p')"
+  gid="$(echo "${opts}" | sed -n 's/.*gid=\([0-9]*\).*/\1/p')"
+  mount -t ntfs3 -o "uid=${uid},gid=${gid},umask=002" "${device}" "${mp}" \
+    || die "Falha ao montar ${device} em ${mp}"
+}
+
 ensure_media_group() {
   if ! getent group media >/dev/null; then
     groupadd --system media
@@ -178,10 +262,16 @@ configure_ntfs_mount() {
   fi
 
   validate_mount_point "${MOUNT_POINT}"
+
+  # Limpar mount FUSE/NTFS morto ANTES do mkdir (senão: "Ponto final de transporte não está conectado")
+  clear_stale_mount_point "${MOUNT_POINT}"
+
   mkdir -p "${MOUNT_POINT}"
 
+  [[ -n "${TARGET_UID:-}" ]] || die "TARGET_UID vazio — selecione o usuário antes de montar"
   local media_gid
   media_gid="$(getent group media | cut -d: -f3)"
+  [[ -n "${media_gid}" ]] || die "Grupo 'media' sem GID"
   local ntfs_opts="uid=${TARGET_UID},gid=${media_gid},umask=002,windows_names"
 
   # Já montado neste ponto?
@@ -197,15 +287,21 @@ configure_ntfs_mount() {
       umount "${MOUNT_POINT}" 2>/dev/null || umount -l "${MOUNT_POINT}" \
         || die "Não foi possível desmontar mount fantasma ${MOUNT_POINT}"
       log_ok "Mount fantasma removido"
+    elif mount_point_is_stale "${MOUNT_POINT}"; then
+      log_warn "Mount FUSE morto em ${MOUNT_POINT} (transport endpoint disconnected)"
+      umount -l "${MOUNT_POINT}" 2>/dev/null || umount "${MOUNT_POINT}" \
+        || die "Não foi possível desmontar mount morto ${MOUNT_POINT}"
+      log_ok "Mount morto removido"
     elif [[ "${current_dev}" == "${DISK_DEVICE}" ]] || \
          [[ -n "${current_uuid}" && -n "${disk_uuid}" && "${current_uuid}" == "${disk_uuid}" ]]; then
-      log_ok "Disco já montado em ${MOUNT_POINT}"
-      case "${DISK_FSTYPE}" in
-        ntfs|ntfs3|fuseblk)
-          mount -o "remount,${ntfs_opts}" "${MOUNT_POINT}" 2>/dev/null \
-            || log_warn "Não foi possível remount com gid=media — permissões NTFS podem ficar limitadas"
-          ;;
-      esac
+      # ntfs-3g: remount NÃO aplica uid/gid — precisa umount + mount
+      if ! ntfs_mount_has_expected_owner "${MOUNT_POINT}"; then
+        log_warn "Disco montado sem uid=${TARGET_UID}/gid=media — remontando com permissões corretas"
+        umount "${MOUNT_POINT}" 2>/dev/null || umount -l "${MOUNT_POINT}" \
+          || die "Falha ao desmontar ${MOUNT_POINT} para corrigir ownership"
+      else
+        log_ok "Disco já montado em ${MOUNT_POINT} (uid=${TARGET_UID}, gid=media)"
+      fi
     else
       # Mesmo disco sob outro /dev (sdb → sdc)
       local current_blkid_uuid
@@ -243,16 +339,13 @@ configure_ntfs_mount() {
         MUSIC_ROOT="${MOUNT_POINT}/Musicas"
         log_warn "Reutilizando ${MOUNT_POINT} — fstab NÃO será alterado"
         MANAGE_FSTAB=false
-        case "${DISK_FSTYPE}" in
-          ntfs|ntfs3|fuseblk)
-            if ! mount -o "remount,${ntfs_opts}" "${MOUNT_POINT}" 2>/dev/null; then
-              log_warn "Remount com gid=media falhou em ${MOUNT_POINT}"
-              log_warn "Lidarr/Plex podem não escrever na biblioteca até remontar com opções corretas"
-            else
-              log_ok "Remount aplicado em ${MOUNT_POINT} com gid=media"
-            fi
-            ;;
-        esac
+        if ! ntfs_mount_has_expected_owner "${MOUNT_POINT}"; then
+          log_warn "Ownership incorreta em ${MOUNT_POINT} — desmontando para remontar com uid/gid"
+          umount "${MOUNT_POINT}" 2>/dev/null || umount -l "${MOUNT_POINT}" \
+            || die "Falha ao desmontar ${MOUNT_POINT}"
+        else
+          log_ok "Permissões NTFS ok em ${MOUNT_POINT} (uid=${TARGET_UID}, gid=media)"
+        fi
       fi
     fi
 
@@ -260,10 +353,7 @@ configure_ntfs_mount() {
     if ! findmnt -n "${MOUNT_POINT}" &>/dev/null; then
       case "${DISK_FSTYPE}" in
         ntfs|ntfs3|fuseblk)
-          if ! mount -t ntfs-3g -o "${ntfs_opts}" "${DISK_DEVICE}" "${MOUNT_POINT}"; then
-            mount -t ntfs3 -o "uid=${TARGET_UID},gid=${media_gid},umask=002" "${DISK_DEVICE}" "${MOUNT_POINT}" \
-              || die "Falha ao montar ${DISK_DEVICE} em ${MOUNT_POINT}"
-          fi
+          mount_ntfs_with_ownership "${DISK_DEVICE}" "${MOUNT_POINT}" "${ntfs_opts}"
           ;;
         ext4|ext3|xfs|btrfs)
           mount "${DISK_DEVICE}" "${MOUNT_POINT}" || die "Falha ao montar ${DISK_DEVICE}"
@@ -281,15 +371,33 @@ configure_ntfs_mount() {
     fi
   fi
 
+  # Garantia final: NTFS deve mapear para o usuário do instalador
+  case "${DISK_FSTYPE}" in
+    ntfs|ntfs3|fuseblk)
+      if ! ntfs_mount_has_expected_owner "${MOUNT_POINT}"; then
+        log_warn "Pós-mount: ownership ainda errada — forçando remount ntfs-3g"
+        umount "${MOUNT_POINT}" 2>/dev/null || umount -l "${MOUNT_POINT}" \
+          || die "Não foi possível desmontar para corrigir ownership"
+        mount_ntfs_with_ownership "${DISK_DEVICE}" "${MOUNT_POINT}" "${ntfs_opts}"
+      fi
+      if ! ntfs_mount_has_expected_owner "${MOUNT_POINT}"; then
+        die "NTFS montado sem uid=${TARGET_UID}. Opções atuais: $(findmnt -n -o OPTIONS "${MOUNT_POINT}")
+Tente: sudo umount -l ${MOUNT_POINT} && sudo ntfs-3g -o ${ntfs_opts} ${DISK_DEVICE} ${MOUNT_POINT}"
+      fi
+      log_ok "NTFS com ownership uid=${TARGET_UID} gid=${media_gid} (grupo media)"
+      ;;
+  esac
+
   # A partir daqui: apenas gestão de fstab (MANAGE_FSTAB /media / críticos)
   if [[ "${MANAGE_FSTAB:-true}" == "false" ]]; then
     log_info "Pulando fstab (MANAGE_FSTAB=false)"
     return 0
   fi
 
-  # Mounts do desktop (/media/...) são frágeis — nunca gravar no fstab
+  # Em /media/... não gravamos fstab (udev/desktop também usam /media; UUID em fstab
+  # conflita com automount). A montagem em si já usou uid/gid do instalador.
   if [[ "${MOUNT_POINT}" == /media/* ]]; then
-    log_warn "Mount em ${MOUNT_POINT} (udisks/desktop) — fstab NÃO será alterado"
+    log_info "Ponto em /media/* — fstab não será alterado (use sudo ./mount.sh após reboot)"
     return 0
   fi
 
