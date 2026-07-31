@@ -28,6 +28,7 @@ TARGET_HOME=""
 # Disco / montagem
 DISK_DEVICE=""
 DISK_LABEL=""
+DISK_UUID=""
 DISK_FSTYPE=""
 DISK_SIZE=""
 MOUNT_POINT="/media/music"

@@ -46,51 +46,156 @@ parse_args() {
   done
 }
 
-# Se /dev/sdX mudou após reboot, resolve pelo UUID do fstab/estado
-resolve_disk_device() {
-  local device="${DISK_DEVICE:-}"
-  local uuid=""
+# Atualiza DISK_* a partir de um device já resolvido (não apaga valores se blkid falhar)
+_refresh_disk_from_device() {
+  local cand="$1"
+  local probed_uuid="" probed_ft="" probed_lab=""
+  DISK_DEVICE="$(readlink -f "${cand}")"
+  probed_uuid="$(blkid -s UUID -o value "${DISK_DEVICE}" 2>/dev/null || true)"
+  probed_ft="$(blkid -s TYPE -o value "${DISK_DEVICE}" 2>/dev/null || true)"
+  probed_lab="$(blkid -s LABEL -o value "${DISK_DEVICE}" 2>/dev/null || true)"
+  # Fallback lsblk (às vezes blkid precisa de root em NTFS)
+  if [[ -z "${probed_uuid}" || -z "${probed_ft}" || -z "${probed_lab}" ]]; then
+    local lsblk_line
+    lsblk_line="$(lsblk -n -o UUID,FSTYPE,LABEL "${DISK_DEVICE}" 2>/dev/null | head -n1 || true)"
+    if [[ -n "${lsblk_line}" ]]; then
+      [[ -z "${probed_uuid}" ]] && probed_uuid="$(awk '{print $1}' <<<"${lsblk_line}")"
+      [[ -z "${probed_ft}" ]] && probed_ft="$(awk '{print $2}' <<<"${lsblk_line}")"
+      [[ -z "${probed_lab}" ]] && probed_lab="$(awk '{print $3}' <<<"${lsblk_line}")"
+    fi
+  fi
+  if [[ -n "${probed_uuid}" && "${probed_uuid}" != "-" ]]; then
+    DISK_UUID="${probed_uuid}"
+  fi
+  if [[ -n "${probed_ft}" && "${probed_ft}" != "-" ]]; then
+    DISK_FSTYPE="${probed_ft}"
+  fi
+  if [[ -n "${probed_lab}" && "${probed_lab}" != "-" ]]; then
+    DISK_LABEL="${probed_lab}"
+  fi
+  return 0
+}
 
-  if [[ -n "${device}" && -b "${device}" ]]; then
+# true se o path ainda é o disco de dados esperado (nunca confiar só em /dev/sdX)
+_device_matches_expected_disk() {
+  local cand="$1"
+  local expected_uuid="${2:-}"
+  local expected_label="${3:-}"
+  local cand_uuid cand_label cand_type
+
+  [[ -b "${cand}" ]] || return 1
+
+  cand_uuid="$(blkid -s UUID -o value "${cand}" 2>/dev/null || true)"
+  cand_label="$(blkid -s LABEL -o value "${cand}" 2>/dev/null || true)"
+  cand_type="$(blkid -s TYPE -o value "${cand}" 2>/dev/null || true)"
+
+  # swap / sem FS / FS não usável = path reaproveitado (ex.: sdb1 virou swap do SO)
+  [[ -n "${cand_type}" ]] || return 1
+  is_usable_data_fstype "${cand_type}" || return 1
+
+  if [[ -n "${expected_uuid}" && -n "${cand_uuid}" && "${cand_uuid}" != "${expected_uuid}" ]]; then
+    return 1
+  fi
+  if [[ -n "${expected_label}" && "${expected_label}" != "local" && -n "${cand_label}" && "${cand_label}" != "${expected_label}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# UUID do disco: estado → fstab (ativo ou comentado) → blkid do path antigo só se label bater
+_lookup_disk_uuid() {
+  local uuid="${DISK_UUID:-}"
+  local device="${DISK_DEVICE:-}"
+  local expected_label="${DISK_LABEL:-}"
+
+  if [[ -n "${uuid}" ]]; then
+    printf '%s\n' "${uuid}"
     return 0
   fi
 
-  # UUID da entrada do instalador no fstab
   if [[ -f /etc/fstab ]]; then
     uuid="$(awk -v marker="${FSTAB_MARKER:-# music-server-installer}" '
       index($0, marker) == 1 { getline; if ($1 ~ /^UUID=/) { sub(/^UUID=/, "", $1); print $1; exit } }
     ' /etc/fstab 2>/dev/null || true)"
+
+    # reset-mount.sh comenta a linha; ainda dá para recuperar o UUID pelo mount point
+    if [[ -z "${uuid}" && -n "${MOUNT_POINT:-}" ]]; then
+      uuid="$(awk -v mp="${MOUNT_POINT}" '
+        {
+          line = $0
+          sub(/^[[:space:]]*#+[[:space:]]*/, "", line)
+          if (line !~ /^UUID=/) next
+          n = split(line, f, /[[:space:]]+/)
+          if (n >= 2 && f[2] == mp) {
+            sub(/^UUID=/, "", f[1])
+            print f[1]
+            exit
+          }
+        }
+      ' /etc/fstab 2>/dev/null || true)"
+    fi
   fi
 
-  # Fallback: UUID do device antigo (se ainda existir no blkid cache) ou label
-  if [[ -z "${uuid}" && -n "${device}" ]]; then
-    uuid="$(blkid -s UUID -o value "${device}" 2>/dev/null || true)"
+  # Só use blkid do path antigo se o label ainda for o esperado (evita UUID do swap)
+  if [[ -z "${uuid}" && -n "${device}" && -b "${device}" ]]; then
+    local old_label
+    old_label="$(blkid -s LABEL -o value "${device}" 2>/dev/null || true)"
+    if [[ -n "${expected_label}" && "${expected_label}" != "local" && "${old_label}" == "${expected_label}" ]]; then
+      uuid="$(blkid -s UUID -o value "${device}" 2>/dev/null || true)"
+    fi
   fi
 
+  printf '%s\n' "${uuid}"
+}
+
+# Se /dev/sdX mudou após reboot, resolve por UUID/label — nunca confiar só no path
+resolve_disk_device() {
+  local device="${DISK_DEVICE:-}"
+  local expected_label="${DISK_LABEL:-}"
+  local uuid=""
+  local by_uuid by_label actual_type
+
+  uuid="$(_lookup_disk_uuid)"
+  DISK_UUID="${uuid}"
+
+  # 1) UUID estável (by-uuid)
   if [[ -n "${uuid}" ]]; then
-    local by_uuid="/dev/disk/by-uuid/${uuid}"
-    if [[ -b "${by_uuid}" || -L "${by_uuid}" ]]; then
-      DISK_DEVICE="$(readlink -f "${by_uuid}")"
-      log_ok "Disco resolvido por UUID → ${DISK_DEVICE}"
-      # Atualiza fstype se possível
-      local ft
-      ft="$(blkid -s TYPE -o value "${DISK_DEVICE}" 2>/dev/null || true)"
-      [[ -n "${ft}" ]] && DISK_FSTYPE="${ft}"
+    by_uuid="/dev/disk/by-uuid/${uuid}"
+    if [[ -e "${by_uuid}" ]]; then
+      _refresh_disk_from_device "${by_uuid}"
+      if [[ "${DISK_DEVICE}" != "${device}" && -n "${device}" ]]; then
+        log_ok "Disco resolvido por UUID (${device} → ${DISK_DEVICE})"
+      else
+        log_ok "Disco resolvido por UUID → ${DISK_DEVICE}"
+      fi
       return 0
     fi
   fi
 
-  # Label conhecido (ex.: SAMSUNG)
-  if [[ -n "${DISK_LABEL:-}" && "${DISK_LABEL}" != "local" ]]; then
-    local by_label="/dev/disk/by-label/${DISK_LABEL}"
+  # 2) Label conhecido (ex.: SAMSUNG)
+  if [[ -n "${expected_label}" && "${expected_label}" != "local" ]]; then
+    by_label="/dev/disk/by-label/${expected_label}"
     if [[ -e "${by_label}" ]]; then
-      DISK_DEVICE="$(readlink -f "${by_label}")"
-      log_ok "Disco resolvido por label ${DISK_LABEL} → ${DISK_DEVICE}"
-      local ft
-      ft="$(blkid -s TYPE -o value "${DISK_DEVICE}" 2>/dev/null || true)"
-      [[ -n "${ft}" ]] && DISK_FSTYPE="${ft}"
+      _refresh_disk_from_device "${by_label}"
+      if [[ "${DISK_DEVICE}" != "${device}" && -n "${device}" ]]; then
+        log_ok "Disco resolvido por label ${expected_label} (${device} → ${DISK_DEVICE})"
+      else
+        log_ok "Disco resolvido por label ${expected_label} → ${DISK_DEVICE}"
+      fi
       return 0
     fi
+  fi
+
+  # 3) Path do estado só se ainda for o mesmo disco de dados
+  if [[ -n "${device}" && -b "${device}" ]] && \
+     _device_matches_expected_disk "${device}" "${uuid}" "${expected_label}"; then
+    _refresh_disk_from_device "${device}"
+    return 0
+  fi
+
+  if [[ -n "${device}" && -b "${device}" ]]; then
+    actual_type="$(blkid -s TYPE -o value "${device}" 2>/dev/null || echo "?")"
+    log_warn "Path antigo ${device} não é mais o disco da biblioteca (type=${actual_type}, esperado label=${expected_label:-?} uuid=${uuid:-?})"
   fi
 
   return 1

@@ -143,6 +143,13 @@ mount_ntfs_with_ownership() {
   local device="$1"
   local mp="$2"
   local opts="$3"
+  local actual_type=""
+
+  actual_type="$(blkid -s TYPE -o value "${device}" 2>/dev/null || true)"
+  if [[ -n "${actual_type}" && "${actual_type}" != "ntfs" && "${actual_type}" != "ntfs3" && "${actual_type}" != "fuseblk" ]]; then
+    die "Device ${device} não é NTFS (type=${actual_type}). O path /dev/sdX provavelmente mudou após reboot.
+Rode: sudo ./mount.sh -i   # ou reconecte o HD e: sudo ./mount.sh"
+  fi
 
   log_info "Montando NTFS: ntfs-3g -o ${opts}"
   if command -v ntfs-3g >/dev/null 2>&1; then
@@ -158,8 +165,11 @@ mount_ntfs_with_ownership() {
   local uid gid
   uid="$(echo "${opts}" | sed -n 's/.*uid=\([0-9]*\).*/\1/p')"
   gid="$(echo "${opts}" | sed -n 's/.*gid=\([0-9]*\).*/\1/p')"
-  mount -t ntfs3 -o "uid=${uid},gid=${gid},umask=002" "${device}" "${mp}" \
-    || die "Falha ao montar ${device} em ${mp}"
+  if ! mount -t ntfs3 -o "uid=${uid},gid=${gid},umask=002" "${device}" "${mp}"; then
+    die "Falha ao montar ${device} em ${mp} (type=${actual_type:-desconhecido}).
+Se a letra do disco mudou (sdb→sda), rode: sudo ./mount.sh -i
+Mount fantasma: sudo ./reset-mount.sh && sudo ./mount.sh"
+  fi
 }
 
 ensure_media_group() {

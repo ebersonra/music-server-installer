@@ -485,6 +485,7 @@ _apply_selected_disk() {
   DISK_LABEL="${DISK_LABELS[$idx]}"
   DISK_FSTYPE="${DISK_FSTYPES[$idx]}"
   DISK_SIZE="${DISK_SIZES[$idx]}"
+  DISK_UUID="$(blkid -s UUID -o value "${DISK_DEVICE}" 2>/dev/null || true)"
 
   if [[ "${DISK_MOUNTS[$idx]}" != "-" && -n "${DISK_MOUNTS[$idx]}" ]]; then
     local current_mp="${DISK_MOUNTS[$idx]}"
@@ -532,6 +533,7 @@ _select_local_music_path() {
   MOUNT_POINT="$(dirname "${custom}")"
   DISK_DEVICE="local"
   DISK_LABEL="local"
+  DISK_UUID=""
   DISK_FSTYPE="local"
   DISK_SIZE="-"
 }
@@ -804,6 +806,7 @@ save_state() {
     printf 'TARGET_HOME=%q\n' "${TARGET_HOME}"
     printf 'DISK_DEVICE=%q\n' "${DISK_DEVICE}"
     printf 'DISK_LABEL=%q\n' "${DISK_LABEL}"
+    printf 'DISK_UUID=%q\n' "${DISK_UUID:-}"
     printf 'DISK_FSTYPE=%q\n' "${DISK_FSTYPE}"
     printf 'MOUNT_POINT=%q\n' "${MOUNT_POINT}"
     printf 'MUSIC_ROOT=%q\n' "${MUSIC_ROOT}"
