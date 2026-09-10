@@ -1,6 +1,6 @@
 # How-to: baixar músicas com Lidarr + Prowlarr + FlareSolverr + qBittorrent + Plex
 
-Guia prático para o stack do **Music Server Installer** ([diagrama atual](arquitetura-musica.png); [arquitetura completa de referência](arquitetura-full.jpg)).
+Guia prático para o stack do **Music Server Installer** ([diagrama](arquitetura-musica.png)).
 
 ## Visão geral
 

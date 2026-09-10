@@ -14,7 +14,7 @@ Instala e configura:
 
 Também detecta discos (incluindo NTFS/USB), cria pastas, ajusta permissões, abre portas no firewall e **liga** Lidarr ↔ Prowlarr ↔ qBit ↔ FlareSolverr via `setup-media-stack.sh`.
 
-Fluxo (subset música — diagrama: [docs/arquitetura-musica.png](docs/arquitetura-musica.png); visão completa com vídeo: [docs/arquitetura-full.jpg](docs/arquitetura-full.jpg)):
+Fluxo (diagrama: [docs/arquitetura-musica.png](docs/arquitetura-musica.png)):
 
 ```
 Lidarr (pedir) → Prowlarr + FlareSolverr (encontrar)
@@ -58,7 +58,6 @@ music-server-installer/
 ├── docs/
 │   ├── how-to.md           # Guia: baixar e organizar músicas
 │   ├── arquitetura-musica.png  # Diagrama do stack atual (só música)
-│   ├── arquitetura-full.jpg    # Referência: arquitetura completa (vídeo+música)
 │   ├── plex-photos.md
 │   ├── foldersync.md
 │   ├── cloud-backup.md
