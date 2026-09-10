@@ -1,31 +1,32 @@
-# How-to: baixar músicas com Lidarr + Prowlarr + qBittorrent + Plex
+# How-to: baixar músicas com Lidarr + Prowlarr + FlareSolverr + qBittorrent + Plex
 
-Guia prático para configurar o stack instalado pelo **Music Server Installer** e começar a baixar álbuns automaticamente.
+Guia prático para o stack do **Music Server Installer** ([diagrama atual](arquitetura-musica.png); [arquitetura completa de referência](arquitetura-full.jpg)).
 
 ## Visão geral
 
 ```
-Prowlarr  →  encontra torrents/NZBs (indexadores)
-    ↓
-Lidarr    →  decide o que baixar (artista/álbum)
-    ↓
-qBittorrent → baixa o arquivo
-    ↓
-Lidarr    →  organiza em Artistas/
-    ↓
-Plex      →  toca a biblioteca
+Lidarr (pedir)  →  Prowlarr + FlareSolverr (encontrar)
+       ↓
+qBittorrent (baixar, com bloqueio de executáveis)
+       ↓
+Lidarr (organiza em Artistas/)
+       ↓
+Plex (ouvir)
 ```
 
-| Serviço     | URL                         | Função              |
-|-------------|-----------------------------|---------------------|
-| Prowlarr    | `http://SEU_IP:9696`        | Indexadores         |
-| Lidarr      | `http://SEU_IP:8686`        | Biblioteca / busca  |
-| qBittorrent | `http://SEU_IP:8080`        | Cliente torrent     |
-| Plex        | `http://SEU_IP:32400/web`   | Player              |
+| Serviço      | URL                              | Função                    |
+|--------------|----------------------------------|---------------------------|
+| Lidarr       | `http://SEU_IP:8686`             | Pedir / biblioteca        |
+| Prowlarr     | `http://SEU_IP:9696`             | Indexadores               |
+| FlareSolverr | `http://127.0.0.1:8191`          | Cloudflare/captcha (local)|
+| qBittorrent  | `http://SEU_IP:8080`             | Downloads                 |
+| Plex         | `http://SEU_IP:32400/web`        | Player                    |
 
 Troque `SEU_IP` pelo IP da máquina (ex.: `192.168.0.19`).
 
-### Pastas padrão do instalador
+> **Pedir = Lidarr.** Apps tipo Overseerr/Jellyseerr não pedem música — use **Add New** / busca no Lidarr.
+
+### Pastas padrão
 
 ```
 /media/music/Musicas/              ← biblioteca
@@ -34,16 +35,39 @@ Troque `SEU_IP` pelo IP da máquina (ex.: `192.168.0.19`).
     └── Incomplete/
 ```
 
-Confira o caminho real:
-
 ```bash
 grep MUSIC_ROOT /var/lib/music-server-installer/install.state
 # esperado: /media/music/Musicas
 ```
 
+### Wiring automático
+
+Após o `install.sh` (ou a qualquer momento):
+
+```bash
+sudo ./setup-media-stack.sh
+# ou: sudo msi-setup-media
+```
+
+Isso configura (idempotente):
+
+- Root folder `Artistas/` no Lidarr
+- Download client qBittorrent no Lidarr
+- App Lidarr no Prowlarr (Full Sync)
+- Proxy FlareSolverr no Prowlarr
+- Failed download handling + blocklist de nomes-isca
+- Tamanho mínimo (~2 MB) nas quality definitions
+- Exclusões de arquivos perigosos no qBittorrent
+
+Se o Test do qBittorrent falhar por senha:
+
+```bash
+sudo ./setup-media-stack.sh --qbit-password 'SUA_SENHA'
+```
+
 ---
 
-## 0. Acesso inicial (importante)
+## 0. Acesso inicial
 
 1. Se Lidarr/Prowlarr pedirem login e você ainda não criou usuário:
 
@@ -51,178 +75,112 @@ grep MUSIC_ROOT /var/lib/music-server-installer/install.state
 sudo ./fix-servarr-auth.sh
 ```
 
-2. Abra cada serviço e em **Settings → General → Security** ative **Forms** e crie usuário/senha.
-3. qBittorrent: usuário `admin` — senha temporária no journal:
+2. Em cada serviço: **Settings → General → Security** → **Forms** + usuário/senha.
+3. qBittorrent: usuário `admin` — senha temporária:
 
 ```bash
 journalctl -u qbittorrent-nox@$USER -n 30 --no-pager | grep -i senha
 ```
 
-Defina uma senha permanente em **Ferramentas → Opções → Web UI**.
+---
+
+## 1. Proteção de download
+
+### qBittorrent — arquivos excluídos
+
+O instalador ativa **Excluded file names** com wildcards para:
+
+- **Windows:** `*.exe`, `*.scr`, `*.bat`, `*.cmd`, `*.msi`, `*.com`, `*.vbs`, `*.ps1`, `*.dll`, `*.sys`, `*.js`
+- **Unix/Linux:** `*.sh`, `*.bash`, `*.zsh`, `*.csh`, `*.ksh`, `*.deb`, `*.rpm`, `*.pkg`, `*.snap`, `*.AppImage`, `*.run`, `*.bin`, `*.so`, `*.dylib`, `*.apk`
+
+Áudio (`*.flac`, `*.mp3`, …), `*.cue`, `*.log`, capas **não** são bloqueados.
+
+Limite: o filtro age pelo **nome do arquivo** no torrent (não detecta malware renomeado para `.flac`).
+
+### Lidarr
+
+- Failed / completed download handling (via `setup-media-stack.sh`)
+- Release profile `MSI-blocklist-armadilhas` (ex.: BROADCAST, SODAPOP, …)
+- `minSize` ≥ 2 MB nas quality definitions (reduz fakes minúsculos)
 
 ---
 
-## 1. qBittorrent — cliente de download
-
-1. Abra `http://SEU_IP:8080` e faça login.
-2. **Ferramentas → Opções → Downloads**:
-   - Pasta padrão de salvamento: `.../Musicas/Downloads`
-   - Manter incompletos em: `.../Musicas/Downloads/Incomplete` (opcional)
-3. **Conexão**: deixe a porta padrão (ou a que o instalador configurou).
-4. Salve.
-
-Não precisa criar categorias agora; o Lidarr pode criar a categoria `lidarr` sozinho.
-
----
-
-## 2. Prowlarr — indexadores
+## 2. Prowlarr — indexadores (música)
 
 1. Abra `http://SEU_IP:9696`.
-2. **Settings → General**: confirme a porta `9696` e salve.
-3. **Indexers → Add Indexer** (`+`):
-   - Escolha indexadores públicos ou privados que você usa.
-   - Teste cada um (**Test**) até ficar verde.
-4. **Settings → Apps → Add Application → Lidarr**:
-   - **Prowlarr Server**: `http://localhost:9696` (ou o IP da máquina)
-   - **Lidarr Server**: `http://localhost:8686`
-   - **API Key**: copie em Lidarr → **Settings → General → Security → API Key**
-   - **Sync Level**: `Full Sync` (recomendado)
-   - **Test** → **Save**
+2. Confirme o proxy **FlareSolverr** em **Settings → Indexers → Indexer Proxies** (ou rode `setup-media-stack.sh`).
+3. **Indexers → Add Indexer**: use fontes de **música** (públicas ou privadas que você tenha conta). Evite indexadores só de filme/série (YTS, EZTV, etc.).
+4. Em indexadores com Cloudflare, associe o proxy FlareSolverr.
+5. **Settings → Apps → Lidarr** deve existir após o wiring (Full Sync).
 
-Com isso, os indexadores do Prowlarr passam a aparecer no Lidarr automaticamente.
-
-> Dica: comece com 2–3 indexadores estáveis. Muitos indexadores ruins só geram falha de busca.
+> Comece com 2–3 indexadores estáveis.
 
 ---
 
-## 3. Lidarr — biblioteca e download
+## 3. Lidarr — pedir e baixar
 
-### 3.1 Root folder (onde as músicas ficam)
+### 3.1 Root folder e download client
 
-1. Abra `http://SEU_IP:8686`.
-2. **Settings → Media Management → Root Folders → Add Root Folder**:
-   - Caminho: `.../Musicas/Artistas`  
-     (ex.: `/media/music/Musicas/Artistas`)
-3. Em **Settings → Media Management**:
-   - Ative **Rename Tracks** se quiser nomes padronizados.
-   - Qualidade: comece com perfil **Any** ou **Lossless** (conforme preferência).
+Já criados pelo wiring. Confira:
 
-### 3.2 Download client (qBittorrent)
+- **Media Management → Root Folders:** `.../Musicas/Artistas`
+- **Download Clients → qBittorrent:** `127.0.0.1:8080`, category `lidarr`
 
-1. **Settings → Download Clients → + → qBittorrent**:
-   - Host: `localhost` (ou `127.0.0.1`)
-   - Port: `8080`
-   - Username: `admin`
-   - Password: a senha que você definiu
-   - Category: `lidarr`
-2. **Test** → deve ficar verde → **Save**.
+### 3.2 Pedir o primeiro álbum
 
-### 3.3 Indexadores no Lidarr
-
-Se o Prowlarr já sincronizou (**Apps**), os indexadores aparecem em  
-**Settings → Indexers**. Confirme que estão habilitados.
-
-Se não sincronizou, adicione manualmente ou refaça o passo 2.4 do Prowlarr.
-
-### 3.4 Metadata
-
-Em **Settings → Metadata**, deixe pelo menos um provedor ativo (ex.: **Lidarr** / MusicBrainz padrão) para capas e tags.
+1. **Add New** → artista → **Root Folder** `Artistas` → Monitor → **Add + Search**.
+2. Acompanhe: Lidarr **Activity** → qBittorrent → pasta `Artistas/`.
 
 ---
 
-## 4. Baixar o primeiro álbum
+## 4. Plex — escutar
 
-1. No Lidarr, clique em **Add New** (ou **Library → Add New**).
-2. Digite o nome do artista → selecione o correto.
-3. Escolha o **Root Folder** (`Artistas`).
-4. Monitor: `All Albums` (ou só o que quiser).
-5. Clique em **Add Artist** (ou **Add + Search**).
-6. Abra o artista → escolha um álbum → **Search** / **Interactive Search**.
-7. Escolha um release e clique em **Download**.
+1. `http://SEU_IP:32400/web`
+2. **Libraries → Add Library → Music** → pasta `.../Musicas/Artistas`
+3. Scan após novos downloads
 
-Acompanhe:
-
-| Onde ver | O quê |
-|----------|--------|
-| Lidarr → **Activity → Queue** | fila do Lidarr |
-| qBittorrent | torrent baixando |
-| Lidarr → **Activity → History** | importação concluída |
-| Pasta `Artistas/` | arquivos organizados |
-
-Quando o download termina, o Lidarr importa para `Artistas/Nome Do Artista/...`.
+Opcional: Lidarr **Connect → Plex** (token Plex).
 
 ---
 
-## 5. Plex — escutar
+## 5. Checklist (se nada baixa)
 
-1. Abra `http://SEU_IP:32400/web`.
-2. **Settings → Libraries → Add Library → Music**.
-3. Pasta: `.../Musicas/Artistas` (a mesma do Lidarr).
-4. Salve e aguarde o scan.
-5. Após novos downloads: na biblioteca → **Scan Library Files**.
-
-Opcional: em Lidarr, **Settings → Connect → + → Plex** para avisar o Plex quando um álbum for importado (precisa do token Plex).
-
----
-
-## 6. Checklist rápido (se nada baixa)
-
-1. **Prowlarr** — indexador com **Test** verde?
-2. **Prowlarr → Apps → Lidarr** — sync OK?
-3. **Lidarr → Download Clients** — qBittorrent com **Test** verde?
-4. **Lidarr → Root Folder** — caminho existe e é gravável?
-5. **qBittorrent** — pasta `Downloads` no disco de músicas?
-6. Disco montado?
+1. Indexador no Prowlarr com **Test** verde?
+2. App Lidarr + proxy FlareSolverr no Prowlarr?
+3. Download client qBittorrent no Lidarr com **Test** verde?
+4. Root folder existe e é gravável?
+5. Disco montado?
 
 ```bash
 findmnt /media/music
-ls -la /media/music/Musicas /media/music/Fotos
-ls -la "$(grep -oP 'MUSIC_ROOT=\K.*' /var/lib/music-server-installer/install.state | tr -d "'")"
-```
-
-7. Serviços ativos?
-
-```bash
-systemctl status lidarr prowlarr 'qbittorrent-nox@*' plexmediaserver --no-pager
+systemctl status lidarr prowlarr flaresolverr 'qbittorrent-nox@*' plexmediaserver --no-pager
+sudo ./setup-media-stack.sh -y
 ```
 
 ---
 
-## 7. Fluxo do dia a dia
+## 6. Boas práticas
 
-1. No Lidarr, adicione artistas que você curte.
-2. Deixe **Monitor** ativo.
-3. O Lidarr busca periodicamente (RSS) via Prowlarr.
-4. Quando encontra um álbum faltando, manda para o qBittorrent.
-5. Após baixar, organiza em `Artistas/` e o Plex atualiza.
-
-Para um álbum pontual: **Add → Search / Interactive Search → Download**.
+- Prefira um perfil de qualidade (FLAC ou MP3 320).
+- Não misture root folder com `Downloads/Incomplete`.
+- Respeite a legislação local e os termos dos indexadores.
 
 ---
 
-## 8. Boas práticas
+## Portas
 
-- Prefira qualidade estável (ex.: FLAC ou MP3 320) e mantenha um perfil só.
-- Não misture root folder do Lidarr com downloads incompletos.
-- Faça backup de `/var/lib/lidarr` e `/var/lib/prowlarr` se personalizar muito.
-- Respeite a legislação local e os termos dos indexadores/trackers.
-
----
-
-## Referência rápida de portas
-
-| Porta  | Serviço      |
-|--------|--------------|
-| `8080` | qBittorrent  |
-| `8686` | Lidarr       |
-| `9696` | Prowlarr     |
-| `32400`| Plex         |
-
-Scripts úteis no repositório:
+| Porta   | Serviço      |
+|---------|--------------|
+| `8080`  | qBittorrent  |
+| `8191`  | FlareSolverr (localhost) |
+| `8686`  | Lidarr       |
+| `9696`  | Prowlarr     |
+| `32400` | Plex         |
 
 ```bash
-sudo ./install.sh              # instalação
-sudo ./fix-servarr-auth.sh    # liberar/corrigir login Lidarr/Prowlarr
-sudo ./update.sh               # atualizar serviços
-sudo ./uninstall.sh            # remover serviços (mantém músicas)
+sudo ./install.sh
+sudo ./setup-media-stack.sh
+sudo ./fix-servarr-auth.sh
+sudo ./update.sh
+sudo ./uninstall.sh
 ```

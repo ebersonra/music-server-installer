@@ -3,11 +3,11 @@
 # shellcheck disable=SC2034
 
 # Versão do instalador
-INSTALLER_VERSION="1.0.0"
+INSTALLER_VERSION="1.1.0"
 INSTALLER_NAME="Music Server Installer"
 
 # Diretório base do projeto (definido por quem faz source)
-: "${INSTALLER_ROOT:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+: "${INSTALLER_ROOT:=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)}"
 
 # Arquivo de estado da instalação (para update/uninstall)
 STATE_DIR="/var/lib/music-server-installer"
@@ -46,12 +46,22 @@ INSTALL_PLEX=true
 INSTALL_LIDARR=true
 INSTALL_PROWLARR=true
 INSTALL_QBITTORRENT=true
+INSTALL_FLARESOLVERR=true
 
 # Portas
 PORT_PLEX=32400
 PORT_LIDARR=8686
 PORT_PROWLARR=9696
 PORT_QBITTORRENT=8080
+PORT_FLARESOLVERR=8191
+
+# FlareSolverr (bind local — só Prowlarr na mesma máquina)
+FLARESOLVERR_DIR="/opt/flaresolverr"
+FLARESOLVERR_HOST="127.0.0.1"
+
+# Extensões bloqueadas no qBittorrent (Windows + Unix/Linux)
+# Separadas por vírgula; wildcards do qBit (4.5+)
+QBIT_EXCLUDED_FILE_NAMES="*.exe, *.scr, *.bat, *.cmd, *.msi, *.com, *.vbs, *.ps1, *.dll, *.sys, *.js, *.sh, *.bash, *.zsh, *.csh, *.ksh, *.deb, *.rpm, *.pkg, *.snap, *.AppImage, *.run, *.bin, *.so, *.dylib, *.apk"
 
 # URLs / repositórios
 PLEX_DEB_URL="https://downloads.plex.tv/plex-media-server-new/1.41.3.9314-a0bfb8340/debian/plexmediaserver_1.41.3.9314-a0bfb8340_amd64.deb"
@@ -64,6 +74,7 @@ PLEX_CONFIG_DIR="/var/lib/plexmediaserver"
 LIDARR_CONFIG_DIR="/var/lib/lidarr"
 PROWLARR_CONFIG_DIR="/var/lib/prowlarr"
 QBITTORRENT_CONFIG_DIR=""  # definido após TARGET_HOME
+FLARESOLVERR_CONFIG_DIR="/var/lib/flaresolverr"
 
 # Dependências APT
 COMMON_DEPS=(

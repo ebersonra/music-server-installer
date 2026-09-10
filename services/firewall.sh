@@ -34,6 +34,8 @@ configure_firewall() {
     ufw allow 6881:6891/udp comment "qBittorrent BT UDP" >/dev/null 2>&1 || true
   fi
 
+  # FlareSolverr fica em 127.0.0.1 — não abre porta no UFW
+
   local status
   status="$(ufw status 2>/dev/null | head -1 || true)"
   if echo "${status}" | grep -qi "inactive"; then

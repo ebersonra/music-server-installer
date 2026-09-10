@@ -2,6 +2,37 @@
 # services/qbittorrent.sh — Instalação e configuração do qBittorrent-nox
 # shellcheck disable=SC2154
 
+_qbit_apply_excluded_file_names() {
+  local conf="$1"
+  local names="${QBIT_EXCLUDED_FILE_NAMES:-}"
+  [[ -n "${names}" ]] || return 0
+  [[ -f "${conf}" ]] || return 0
+
+  # Garantir seção [BitTorrent]
+  if ! grep -q '^\[BitTorrent\]' "${conf}"; then
+    printf '\n[BitTorrent]\n' >> "${conf}"
+  fi
+
+  if grep -q 'Session\\ExcludedFileNamesEnabled=' "${conf}"; then
+    sed -i 's|Session\\ExcludedFileNamesEnabled=.*|Session\\ExcludedFileNamesEnabled=true|' "${conf}"
+  else
+    sed -i '/^\[BitTorrent\]/a Session\\ExcludedFileNamesEnabled=true' "${conf}"
+  fi
+
+  if grep -q 'Session\\ExcludedFileNames=' "${conf}"; then
+    local escaped
+    escaped="$(printf '%s' "${names}" | sed -e 's/[&|]/\\&/g')"
+    sed -i "s|Session\\\\ExcludedFileNames=.*|Session\\\\ExcludedFileNames=${escaped}|" "${conf}"
+  else
+    # Inserir linha após ExcludedFileNamesEnabled (ou após [BitTorrent])
+    if grep -q 'Session\\ExcludedFileNamesEnabled=' "${conf}"; then
+      sed -i "/Session\\\\ExcludedFileNamesEnabled=/a Session\\\\ExcludedFileNames=${names}" "${conf}"
+    else
+      sed -i "/^\[BitTorrent\]/a Session\\\\ExcludedFileNames=${names}" "${conf}"
+    fi
+  fi
+}
+
 install_qbittorrent() {
   log_step "Instalando qBittorrent"
   export DEBIAN_FRONTEND=noninteractive
@@ -14,6 +45,7 @@ install_qbittorrent() {
 
   local conf="${QBITTORRENT_CONFIG_DIR}/qBittorrent.conf"
   local template="${INSTALLER_ROOT}/templates/qbittorrent.conf"
+  local excluded="${QBIT_EXCLUDED_FILE_NAMES:-}"
 
   if [[ ! -f "${conf}" ]]; then
     if [[ -f "${template}" ]]; then
@@ -21,11 +53,16 @@ install_qbittorrent() {
           -e "s|__INCOMPLETE_DIR__|${INCOMPLETE_DIR}|g" \
           -e "s|__PORT__|${PORT_QBITTORRENT}|g" \
           -e "s|__MUSIC_ROOT__|${MUSIC_ROOT}|g" \
+          -e "s|__EXCLUDED_FILE_NAMES__|${excluded}|g" \
           "${template}" > "${conf}"
     else
       cat > "${conf}" <<EOF
 [LegalNotice]
 Accepted=true
+
+[BitTorrent]
+Session\\ExcludedFileNamesEnabled=true
+Session\\ExcludedFileNames=${excluded}
 
 [Preferences]
 Connection\\PortRangeMin=6881
@@ -48,6 +85,7 @@ EOF
     if grep -q 'Downloads\\TempPath=' "${conf}"; then
       sed -i "s|Downloads\\\\TempPath=.*|Downloads\\\\TempPath=${INCOMPLETE_DIR}|" "${conf}"
     fi
+    _qbit_apply_excluded_file_names "${conf}"
   fi
 
   chown -R "${TARGET_UID}:${TARGET_GID}" "${TARGET_HOME}/.config"
@@ -55,7 +93,6 @@ EOF
 
   # Unit systemd para o usuário
   local unit_src="${INSTALLER_ROOT}/templates/systemd/qbittorrent-nox.service"
-  local unit_dst="/etc/systemd/system/qbittorrent-nox@${TARGET_USER}.service"
 
   if [[ -f "${unit_src}" ]]; then
     cp "${unit_src}" /etc/systemd/system/qbittorrent-nox@.service
@@ -78,7 +115,6 @@ WantedBy=multi-user.target
 EOF
   fi
 
-  # Aceitar EULA via LegalNotice (já no conf)
   mkdir -p "${DOWNLOADS_DIR}" "${INCOMPLETE_DIR}"
   case "${DISK_FSTYPE:-}" in
     ntfs|ntfs3|fuseblk|vfat|exfat)
@@ -97,7 +133,6 @@ EOF
   if systemctl is-active --quiet "qbittorrent-nox@${TARGET_USER}"; then
     log_ok "qBittorrent ativo (WebUI porta ${PORT_QBITTORRENT})"
     wait_for_port "${PORT_QBITTORRENT}" 30 || log_warn "WebUI ainda não escuta na porta ${PORT_QBITTORRENT}"
-    # Versões recentes geram senha temporária no journal
     local tmp_pass
     tmp_pass="$(journalctl -u "qbittorrent-nox@${TARGET_USER}" -n 80 --no-pager 2>/dev/null \
       | sed -n 's/.*temporary password as[: ]*//Ip;s/.*temporary password is[: ]*//Ip' \
@@ -110,6 +145,7 @@ EOF
     else
       log_info "Login WebUI: admin — se a senha padrão não funcionar, veja: journalctl -u qbittorrent-nox@${TARGET_USER}"
     fi
+    log_info "Exclusões de arquivo perigosas (Windows+Unix) aplicadas no qBittorrent"
   else
     log_warn "qBittorrent pode não ter iniciado — verifique: systemctl status qbittorrent-nox@${TARGET_USER}"
   fi
@@ -122,7 +158,13 @@ update_qbittorrent() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq --only-upgrade qbittorrent-nox || log_warn "Sem atualização do qBittorrent"
-  if [[ -n "${TARGET_USER:-}" ]]; then
+  if [[ -n "${TARGET_USER:-}" && -n "${TARGET_HOME:-}" ]]; then
+    QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
+    local conf="${QBITTORRENT_CONFIG_DIR}/qBittorrent.conf"
+    if [[ -f "${conf}" ]]; then
+      _qbit_apply_excluded_file_names "${conf}"
+      chown "${TARGET_UID}:${TARGET_GID}" "${conf}" 2>/dev/null || true
+    fi
     systemctl restart "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
   fi
   log_ok "qBittorrent atualizado"
@@ -134,7 +176,6 @@ uninstall_qbittorrent() {
     systemctl stop "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
     systemctl disable "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
   fi
-  # Parar todas as instâncias template
   systemctl stop 'qbittorrent-nox@*' 2>/dev/null || true
   export DEBIAN_FRONTEND=noninteractive
   apt-get remove -y -qq qbittorrent-nox 2>/dev/null || true

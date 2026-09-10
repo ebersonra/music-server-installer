@@ -7,7 +7,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Bootstrap: carregar config se ainda não carregado
 # -----------------------------------------------------------------------------
-_common_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_common_self="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=config.sh
 source "${_common_self}/config.sh"
 INSTALLER_ROOT="${_common_self}"
@@ -634,8 +634,8 @@ select_services() {
   echo -e "${C_BOLD}Instalar:${C_RESET}"
   echo
 
-  local services=("Plex" "Lidarr" "Prowlarr" "qBittorrent")
-  local selected=(true true true true)
+  local services=("Plex" "Lidarr" "Prowlarr" "qBittorrent" "FlareSolverr")
+  local selected=(true true true true true)
   local i
 
   for i in "${!services[@]}"; do
@@ -645,6 +645,7 @@ select_services() {
   echo -e "${C_DIM}Pressione Enter para instalar todos, ou informe números para desmarcar${C_RESET}"
   echo -e "${C_DIM}(ex.: 1 3 = desmarcar Plex e Prowlarr)${C_RESET}"
   echo -e "${C_DIM}Com o Plex: pastas de fotos no HD + SFTP (FolderSync) para o celular${C_RESET}"
+  echo -e "${C_DIM}FlareSolverr: bypass Cloudflare nos indexadores (só localhost)${C_RESET}"
   echo
 
   local input
@@ -652,7 +653,7 @@ select_services() {
 
   if [[ -n "${input}" ]]; then
     for num in ${input}; do
-      if [[ "${num}" =~ ^[1-4]$ ]]; then
+      if [[ "${num}" =~ ^[1-5]$ ]]; then
         selected[$((num - 1))]=false
       fi
     done
@@ -662,6 +663,7 @@ select_services() {
   INSTALL_LIDARR="${selected[1]}"
   INSTALL_PROWLARR="${selected[2]}"
   INSTALL_QBITTORRENT="${selected[3]}"
+  INSTALL_FLARESOLVERR="${selected[4]}"
 
   echo
   for i in "${!services[@]}"; do
@@ -819,6 +821,7 @@ save_state() {
     printf 'INSTALL_LIDARR=%q\n' "${INSTALL_LIDARR}"
     printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"
     printf 'INSTALL_QBITTORRENT=%q\n' "${INSTALL_QBITTORRENT}"
+    printf 'INSTALL_FLARESOLVERR=%q\n' "${INSTALL_FLARESOLVERR:-false}"
   } > "${STATE_FILE}"
   chmod 600 "${STATE_FILE}"
   log_ok "Estado salvo em ${STATE_FILE}"
@@ -836,6 +839,7 @@ load_state() {
   fi
   PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
   PLEX_PHOTOS_LIBRARY_NAME="${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
+  INSTALL_FLARESOLVERR="${INSTALL_FLARESOLVERR:-false}"
   QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
   return 0
 }
@@ -932,11 +936,17 @@ print_final_urls() {
     fi
     echo
   fi
+  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
+    echo -e "${C_BOLD}FlareSolverr${C_RESET}"
+    echo -e "http://${FLARESOLVERR_HOST:-127.0.0.1}:${PORT_FLARESOLVERR} ${C_DIM}(somente localhost)${C_RESET}"
+    echo
+  fi
 
   echo -e "${C_CYAN}====================================${C_RESET}"
   echo
   echo -e "${C_DIM}Biblioteca: ${MUSIC_ROOT}${C_RESET}"
   echo -e "${C_DIM}Fotos:      ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}${C_RESET}"
   echo -e "${C_DIM}Estado:     ${STATE_FILE}${C_RESET}"
+  echo -e "${C_DIM}Wiring:     sudo ./setup-media-stack.sh  (ou msi-setup-media)${C_RESET}"
   echo
 }

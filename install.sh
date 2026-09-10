@@ -2,7 +2,7 @@
 # install.sh — Orquestrador interativo do Music Server Installer
 set -euo pipefail
 
-INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"
@@ -20,6 +20,8 @@ source "${INSTALLER_ROOT}/services/lidarr.sh"
 source "${INSTALLER_ROOT}/services/prowlarr.sh"
 # shellcheck source=services/qbittorrent.sh
 source "${INSTALLER_ROOT}/services/qbittorrent.sh"
+# shellcheck source=services/flaresolverr.sh
+source "${INSTALLER_ROOT}/services/flaresolverr.sh"
 
 usage() {
   cat <<EOF
@@ -84,6 +86,7 @@ show_summary() {
   [[ "${INSTALL_LIDARR}" == "true" ]]      && echo -e "    ${C_GREEN}✓${C_RESET} Lidarr"
   [[ "${INSTALL_PROWLARR}" == "true" ]]    && echo -e "    ${C_GREEN}✓${C_RESET} Prowlarr"
   [[ "${INSTALL_QBITTORRENT}" == "true" ]] && echo -e "    ${C_GREEN}✓${C_RESET} qBittorrent"
+  [[ "${INSTALL_FLARESOLVERR}" == "true" ]] && echo -e "    ${C_GREEN}✓${C_RESET} FlareSolverr"
   echo
 }
 
@@ -172,12 +175,20 @@ main() {
   if [[ "${INSTALL_PROWLARR}" == "true" ]]; then
     run_install_step "Prowlarr" install_prowlarr
   fi
+  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
+    run_install_step "FlareSolverr" install_flaresolverr
+  fi
 
   run_install_step "Permissões" configure_permissions
   run_install_step "Grupo media" reapply_media_group
   run_install_step "Firewall" configure_firewall
 
   save_state
+
+  # Ligar Lidarr ↔ Prowlarr ↔ qBit ↔ FlareSolverr (idempotente; precisa do state)
+  if [[ "${INSTALL_LIDARR}" == "true" || "${INSTALL_PROWLARR}" == "true" ]]; then
+    run_install_step "Wiring media stack" "${INSTALLER_ROOT}/setup-media-stack.sh" --yes --from-install
+  fi
 
   echo
   if [[ ${#INSTALL_ERRORS[@]} -eq 0 ]]; then

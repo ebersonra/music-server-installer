@@ -2,7 +2,7 @@
 # setup-cloud-backup.sh — Instala rclone, configura remote e agenda backup
 set -euo pipefail
 
-INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"

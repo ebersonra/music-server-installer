@@ -2,7 +2,7 @@
 # mount.sh — Remonta o disco da biblioteca (sem reinstalar serviços)
 set -euo pipefail
 
-INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"

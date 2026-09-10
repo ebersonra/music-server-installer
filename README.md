@@ -4,14 +4,22 @@ Instalador interativo em Bash para montar um servidor de músicas no **Ubuntu/De
 
 Instala e configura:
 
-| Serviço      | Porta  | Função                          |
-|--------------|--------|---------------------------------|
-| **Plex**     | `32400`| Músicas + fotos (HD externo)    |
-| **Lidarr**   | `8686` | Gerência de artistas/álbuns     |
-| **Prowlarr** | `9696` | Indexadores                     |
-| **qBittorrent** | `8080` | Cliente de download          |
+| Serviço         | Porta   | Função                                      |
+|-----------------|---------|---------------------------------------------|
+| **Plex**        | `32400` | Músicas + fotos (HD externo)                |
+| **Lidarr**      | `8686`  | Pedir / gerenciar artistas e álbuns         |
+| **Prowlarr**    | `9696`  | Indexadores                                 |
+| **FlareSolverr**| `8191`  | Bypass Cloudflare/captcha (só localhost)    |
+| **qBittorrent** | `8080`  | Cliente de download (+ bloqueio de malware) |
 
-Também detecta discos (incluindo NTFS/USB), cria pastas, ajusta permissões e abre portas no firewall.
+Também detecta discos (incluindo NTFS/USB), cria pastas, ajusta permissões, abre portas no firewall e **liga** Lidarr ↔ Prowlarr ↔ qBit ↔ FlareSolverr via `setup-media-stack.sh`.
+
+Fluxo (subset música — diagrama: [docs/arquitetura-musica.png](docs/arquitetura-musica.png); visão completa com vídeo: [docs/arquitetura-full.jpg](docs/arquitetura-full.jpg)):
+
+```
+Lidarr (pedir) → Prowlarr + FlareSolverr (encontrar)
+    → qBittorrent (baixar) → Lidarr (organizar em Artistas/) → Plex (ouvir)
+```
 
 ---
 
@@ -23,16 +31,17 @@ music-server-installer/
 ├── mount.sh                # Só remonta o disco (sem reinstalar)
 ├── update.sh               # Atualiza serviços instalados
 ├── uninstall.sh            # Remove serviços (preserva músicas)
+├── setup-media-stack.sh    # Wiring Lidarr/Prowlarr/qBit/FlareSolverr
 ├── setup-cloud-backup.sh   # Configura rclone + timer (restic/zip → nuvem)
 ├── backup-cloud.sh         # Backup compacto HD → nuvem (restic ou zip)
 ├── setup-security.sh       # Fail2Ban + updates + restic
 ├── backup-restic.sh        # Snapshots criptografados (restic)
 ├── restore-restic.sh       # Restore de snapshots (local ou nuvem)
+├── link-global.sh          # Symlinks em /usr/local/bin (msi-*)
 ├── common.sh               # Funções compartilhadas / UI / discos
 ├── config.sh               # Variáveis e defaults
 ├── fix-servarr-auth.sh     # Corrige auth Lidarr/Prowlarr
 ├── reset-mount.sh          # Limpa mount fantasma do HD
-├── how-to.md               # Guia: baixar e organizar músicas
 ├── README.md
 │
 ├── services/
@@ -40,16 +49,20 @@ music-server-installer/
 │   ├── lidarr.sh
 │   ├── prowlarr.sh
 │   ├── qbittorrent.sh
+│   ├── flaresolverr.sh
 │   ├── mountdisk.sh        # NTFS / fstab / montagem
 │   ├── firewall.sh
 │   ├── permissions.sh
 │   └── security.sh         # Fail2Ban / unattended-upgrades
 │
 ├── docs/
-│   ├── plex-photos.md      # Guia Plex Photos
-│   ├── foldersync.md       # How-to FolderSync no celular
-│   ├── cloud-backup.md     # Backup HD → Google Drive / nuvem
-│   └── security.md         # Fail2Ban, updates, restic
+│   ├── how-to.md           # Guia: baixar e organizar músicas
+│   ├── arquitetura-musica.png  # Diagrama do stack atual (só música)
+│   ├── arquitetura-full.jpg    # Referência: arquitetura completa (vídeo+música)
+│   ├── plex-photos.md
+│   ├── foldersync.md
+│   ├── cloud-backup.md
+│   └── security.md
 │
 └── templates/
     ├── lidarr.xml
@@ -60,7 +73,8 @@ music-server-installer/
     └── systemd/
         ├── lidarr.service
         ├── prowlarr.service
-        └── qbittorrent-nox.service
+        ├── qbittorrent-nox.service
+        └── flaresolverr.service
 ```
 
 O `install.sh` só orquestra: a lógica fica em `common.sh`, `config.sh` e `services/*.sh`.
@@ -141,6 +155,7 @@ Plex         http://IP:32400/web
 Lidarr       http://IP:8686
 Prowlarr     http://IP:9696
 qBittorrent  http://IP:8080
+FlareSolverr http://127.0.0.1:8191   # só na máquina
 ```
 
 - **qBittorrent:** usuário `admin` — senha temporária no journal:
@@ -151,9 +166,49 @@ qBittorrent  http://IP:8080
   **Settings → General → Security**.
 - **Plex Photos:** adicione biblioteca tipo Photos apontando para `/media/music/Fotos`. Sync do celular: [docs/foldersync.md](docs/foldersync.md).
 
-Guia completo de configuração e downloads: **[how-to.md](how-to.md)**.
+O instalador já tenta ligar root folder, download client e proxy FlareSolverr. Se precisar refazer:
+
+```bash
+sudo ./setup-media-stack.sh
+# ou: sudo msi-setup-media
+```
+
+Guia completo: **[docs/how-to.md](docs/how-to.md)**.
 
 Ouvir no celular: app **Plex** na mesma conta, na Wi‑Fi do servidor.
+
+---
+
+## Comandos globais (`msi-*`)
+
+O repositório é a **fonte da verdade**. `link-global.sh` cria symlinks em `/usr/local/bin` — edições nos `.sh` do projeto valem na hora, sem recopiar.
+
+```bash
+cd /caminho/para/music-server-installer
+sudo ./link-global.sh          # cria/atualiza links
+./link-global.sh --list        # ver mapeamento
+sudo ./link-global.sh --remove # remove links deste repo
+```
+
+Depois, em **qualquer terminal** (sem `cd` no projeto):
+
+| Comando global | Equivalente no repo |
+|----------------|---------------------|
+| `sudo msi-install` | `./install.sh` |
+| `sudo msi-mount` | `./mount.sh` |
+| `sudo msi-update` | `./update.sh` |
+| `sudo msi-uninstall` | `./uninstall.sh` |
+| `sudo msi-setup-media` | `./setup-media-stack.sh` |
+| `sudo msi-setup-cloud-backup` | `./setup-cloud-backup.sh` |
+| `sudo msi-backup-cloud` | `./backup-cloud.sh` |
+| `sudo msi-setup-security` | `./setup-security.sh` |
+| `sudo msi-backup-restic` | `./backup-restic.sh` |
+| `sudo msi-restore-restic` | `./restore-restic.sh` |
+| `sudo msi-fix-servarr-auth` | `./fix-servarr-auth.sh` |
+| `sudo msi-reset-mount` | `./reset-mount.sh` |
+| `msi-link-global --list` | `./link-global.sh --list` |
+
+Se mover o clone do projeto, rode de novo `sudo ./link-global.sh` (ou `sudo msi-link-global`) para apontar os links ao novo caminho.
 
 ---
 
@@ -166,6 +221,7 @@ Ouvir no celular: app **Plex** na mesma conta, na Wi‑Fi do servidor.
 | `sudo ./update.sh` | Atualiza serviços |
 | `sudo ./uninstall.sh` | Remove serviços (músicas/fotos preservadas) |
 | `sudo ./uninstall.sh --purge-data` | Remove também configs dos apps |
+| `sudo ./setup-media-stack.sh` | Liga Lidarr/Prowlarr/qBit/FlareSolverr (idempotente) |
 | `sudo ./setup-cloud-backup.sh` | Configura backup compacto HD → nuvem (rclone) |
 | `sudo ./backup-cloud.sh` | Envia restic (snapshots) ou *.zip para a nuvem |
 | `sudo ./setup-security.sh` | Fail2Ban + updates automáticos + restic |
@@ -173,6 +229,7 @@ Ouvir no celular: app **Plex** na mesma conta, na Wi‑Fi do servidor.
 | `sudo ./restore-restic.sh` | Restaura snapshots restic (local ou nuvem) |
 | `sudo ./fix-servarr-auth.sh` | Corrige login/HTTP 500 do Lidarr/Prowlarr |
 | `sudo ./reset-mount.sh` | Desmonta mount fantasma (ex.: `/media/music`) |
+| `sudo ./link-global.sh` | Publica os scripts como `msi-*` no PATH |
 
 Opções do instalador:
 
@@ -209,7 +266,7 @@ sudo ./fix-servarr-auth.sh
 Causa comum: valor inválido em `AuthenticationRequired` (use `DisabledForLocalAddresses`, não `Disabled`).
 
 **Torrents parados / 0 peers**  
-Veja fila no qBittorrent (itens “Parado” ou magnet com 0 B), ative DHT/PeX/UPnP e aumente downloads ativos. Detalhes em [how-to.md](how-to.md).
+Veja fila no qBittorrent (itens “Parado” ou magnet com 0 B), ative DHT/PeX/UPnP e aumente downloads ativos. Detalhes em [docs/how-to.md](docs/how-to.md).
 
 ---
 

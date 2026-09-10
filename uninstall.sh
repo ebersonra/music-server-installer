@@ -2,7 +2,7 @@
 # uninstall.sh — Desinstalação limpa do Music Server Installer
 set -euo pipefail
 
-INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"
@@ -18,6 +18,8 @@ source "${INSTALLER_ROOT}/services/lidarr.sh"
 source "${INSTALLER_ROOT}/services/prowlarr.sh"
 # shellcheck source=services/qbittorrent.sh
 source "${INSTALLER_ROOT}/services/qbittorrent.sh"
+# shellcheck source=services/flaresolverr.sh
+source "${INSTALLER_ROOT}/services/flaresolverr.sh"
 
 usage() {
   cat <<EOF
@@ -78,6 +80,7 @@ main() {
     INSTALL_LIDARR=true
     INSTALL_PROWLARR=true
     INSTALL_QBITTORRENT=true
+    INSTALL_FLARESOLVERR=true
     TARGET_USER="${SUDO_USER:-}"
     if [[ -z "${TARGET_USER}" ]]; then
       TARGET_USER="$(prompt_input "Usuário do qBittorrent (vazio = pular serviço)" "")"
@@ -121,6 +124,9 @@ main() {
   if [[ "${INSTALL_LIDARR}" == "true" ]]; then
     uninstall_lidarr
   fi
+  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
+    uninstall_flaresolverr
+  fi
   if [[ "${INSTALL_PLEX}" == "true" ]]; then
     uninstall_plex
   fi
@@ -133,6 +139,10 @@ main() {
 
   if [[ "${PURGE_DATA}" == "true" ]]; then
     purge_service_data
+    rm -rf "${FLARESOLVERR_CONFIG_DIR:-/var/lib/flaresolverr}" 2>/dev/null || true
+    if id flaresolverr &>/dev/null; then
+      userdel flaresolverr 2>/dev/null || true
+    fi
   fi
 
   # Remover repositório Servarr se ninguém mais usa

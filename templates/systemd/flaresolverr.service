@@ -1,0 +1,21 @@
+[Unit]
+Description=FlareSolverr (Cloudflare / captcha bypass for indexers)
+After=network.target
+
+[Service]
+Type=simple
+User=flaresolverr
+Group=flaresolverr
+SyslogIdentifier=flaresolverr
+Restart=always
+RestartSec=5
+Environment=LOG_LEVEL=info
+Environment=CAPTCHA_SOLVER=none
+Environment=HOST=@HOST@
+Environment=PORT=@PORT@
+WorkingDirectory=@DIR@
+ExecStart=@DIR@/flaresolverr
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

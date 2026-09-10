@@ -2,7 +2,7 @@
 # update.sh — Atualização dos serviços do Music Server Installer
 set -euo pipefail
 
-INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"
@@ -14,6 +14,8 @@ source "${INSTALLER_ROOT}/services/lidarr.sh"
 source "${INSTALLER_ROOT}/services/prowlarr.sh"
 # shellcheck source=services/qbittorrent.sh
 source "${INSTALLER_ROOT}/services/qbittorrent.sh"
+# shellcheck source=services/flaresolverr.sh
+source "${INSTALLER_ROOT}/services/flaresolverr.sh"
 
 usage() {
   cat <<EOF
@@ -67,6 +69,7 @@ main() {
   [[ "${INSTALL_LIDARR}" == "true" ]]      && echo -e "    ${C_GREEN}✓${C_RESET} Lidarr"
   [[ "${INSTALL_PROWLARR}" == "true" ]]    && echo -e "    ${C_GREEN}✓${C_RESET} Prowlarr"
   [[ "${INSTALL_QBITTORRENT}" == "true" ]] && echo -e "    ${C_GREEN}✓${C_RESET} qBittorrent"
+  [[ "${INSTALL_FLARESOLVERR}" == "true" ]] && echo -e "    ${C_GREEN}✓${C_RESET} FlareSolverr"
   echo
 
   if ! confirm "Continuar com a atualização?"; then
@@ -97,6 +100,9 @@ main() {
   fi
   if [[ "${INSTALL_PROWLARR}" == "true" ]]; then
     update_prowlarr
+  fi
+  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
+    update_flaresolverr
   fi
 
   # Atualizar versão no estado (valores com quoting seguro)
@@ -133,6 +139,7 @@ main() {
       printf 'INSTALL_LIDARR=%q\n' "${INSTALL_LIDARR}"
       printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"
       printf 'INSTALL_QBITTORRENT=%q\n' "${INSTALL_QBITTORRENT}"
+      printf 'INSTALL_FLARESOLVERR=%q\n' "${INSTALL_FLARESOLVERR:-false}"
     } > "${tmp_state}"
     mv "${tmp_state}" "${STATE_FILE}"
     chmod 600 "${STATE_FILE}"
@@ -147,6 +154,7 @@ main() {
   [[ "${INSTALL_LIDARR}" == "true" ]]      && echo -e "${C_DIM}Lidarr       http://${ip}:${PORT_LIDARR}${C_RESET}"
   [[ "${INSTALL_PROWLARR}" == "true" ]]    && echo -e "${C_DIM}Prowlarr     http://${ip}:${PORT_PROWLARR}${C_RESET}"
   [[ "${INSTALL_QBITTORRENT}" == "true" ]] && echo -e "${C_DIM}qBittorrent  http://${ip}:${PORT_QBITTORRENT}${C_RESET}"
+  [[ "${INSTALL_FLARESOLVERR}" == "true" ]] && echo -e "${C_DIM}FlareSolverr http://${FLARESOLVERR_HOST:-127.0.0.1}:${PORT_FLARESOLVERR}${C_RESET}"
   echo
 }
 
