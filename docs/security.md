@@ -10,6 +10,8 @@ Três camadas recomendadas quando o notebook guarda **fotos da família** e mús
 
 Complementa o backup na nuvem (`docs/cloud-backup.md`): o cloud backup sobe o **repositório restic** (ou zips); o restic em si gera os snapshots criptografados com histórico.
 
+O stack de mídia (Plex/Lidarr/…) roda em Docker — ver [docker.md](docker.md). Fail2Ban, updates e restic permanecem no **host**.
+
 ```text
 Internet
    │
@@ -26,15 +28,16 @@ HD /media/music
 ## Setup rápido
 
 ```bash
-sudo ./setup-security.sh
+sudo msi-setup-security
+# equivalente: sudo ./setup-security.sh
 ```
 
 Opções:
 
 ```bash
-sudo ./setup-security.sh --only-fail2ban
-sudo ./setup-security.sh --only-updates
-sudo ./setup-security.sh --only-restic
+sudo msi-setup-security --only-fail2ban
+sudo msi-setup-security --only-updates
+sudo msi-setup-security --only-restic
 ```
 
 ## 1. Fail2Ban (SSH)
@@ -93,19 +96,20 @@ Exemplos em `setup-security.sh`:
 | Google Drive (rclone) | `rclone:gdrive:restic-music-server` |
 | SFTP | `sftp:user@host:/backups/restic` |
 
-Para `rclone:`, configure antes: `sudo ./setup-cloud-backup.sh`.
+Para `rclone:`, configure antes: `sudo msi-setup-cloud-backup`.
 
 ### Uso
 
 ```bash
-sudo ./backup-restic.sh              # snapshot + retenção
-sudo ./backup-restic.sh --dry-run
-sudo ./backup-restic.sh --prune-only
+sudo msi-backup-restic              # snapshot + retenção
+sudo msi-backup-restic --dry-run
+sudo msi-backup-restic --prune-only
+# equivalentes: sudo ./backup-restic.sh …
 ```
 
 Retenção padrão: 7 diários, 4 semanais, 6 mensais, 2 anuais.
 
-Timer: `music-server-restic.timer` (padrão 04:00).
+Timer: `music-server-restic.timer` (padrão 04:00) — permanece no **host** (systemd), independente do stack Docker.
 
 ```bash
 systemctl status music-server-restic.timer
@@ -114,31 +118,31 @@ journalctl -u music-server-restic.service -n 40 --no-pager
 
 ### Restore (recuperar arquivos)
 
-Use o script `restore-restic.sh` (ou a CLI do restic diretamente).  
+Use `msi-restore-restic` / `restore-restic.sh` (ou a CLI do restic).  
 **Sem a senha** em `/var/lib/music-server-installer/restic.password`, os dados são irrecuperáveis.
 
 #### Com o script
 
 ```bash
 # Listar snapshots
-sudo ./restore-restic.sh --list
+sudo msi-restore-restic --list
 
 # Teste completo (não sobrescreve o HD)
-sudo ./restore-restic.sh --target /tmp/restore-test
+sudo msi-restore-restic --target /tmp/restore-test
 
 # Só fotos / só músicas
-sudo ./restore-restic.sh --target /tmp/fotos --photos-only
-sudo ./restore-restic.sh --target /tmp/musicas --music-only
+sudo msi-restore-restic --target /tmp/fotos --photos-only
+sudo msi-restore-restic --target /tmp/musicas --music-only
 
 # Snapshot antigo (ID de --list)
-sudo ./restore-restic.sh --target /tmp/restore-old --snapshot 97b32555
+sudo msi-restore-restic --target /tmp/restore-old --snapshot 97b32555
 
 # Simular
-sudo ./restore-restic.sh --target /tmp/x --photos-only --dry-run
+sudo msi-restore-restic --target /tmp/x --photos-only --dry-run
 
 # Repo local perdido → baixar espelho da nuvem e restaurar
-sudo ./restore-restic.sh --from-cloud --list
-sudo ./restore-restic.sh --from-cloud --target /tmp/restore-cloud --photos-only
+sudo msi-restore-restic --from-cloud --list
+sudo msi-restore-restic --from-cloud --target /tmp/restore-cloud --photos-only
 ```
 
 | Opção | Função |
@@ -167,7 +171,7 @@ Os snapshots guardam **paths absolutos** (`/media/music/Musicas`, `/media/music/
 Prefira restaurar em `/tmp`, conferir, e só então copiar:
 
 ```bash
-sudo ./restore-restic.sh --target /tmp/fotos --photos-only
+sudo msi-restore-restic --target /tmp/fotos --photos-only
 # conferir…
 sudo rsync -aH --info=progress2 /tmp/fotos/ /media/music/Fotos/
 ```
@@ -176,7 +180,7 @@ Restore **direto** no HD sobrescreve o que estiver lá:
 
 ```bash
 # perigoso se o HD ainda tiver dados bons
-sudo ./restore-restic.sh --target /media/music/Fotos --photos-only
+sudo msi-restore-restic --target /media/music/Fotos --photos-only
 ```
 
 #### CLI manual (equivalente)
@@ -202,8 +206,8 @@ Se `/media/backup-restic` sumiu, mas o espelho na nuvem existe (`backup-cloud.sh
 
 ```bash
 # Via script (baixa para /var/lib/music-server-installer/restic-from-cloud)
-sudo ./restore-restic.sh --from-cloud --list
-sudo ./restore-restic.sh --from-cloud --target /tmp/restore-test
+sudo msi-restore-restic --from-cloud --list
+sudo msi-restore-restic --from-cloud --target /tmp/restore-test
 
 # Ou manualmente
 rclone sync "Google Drive:music-server-backup/restic-repo" /media/backup-restic-restore
@@ -216,13 +220,13 @@ restic restore latest --target /tmp/restore-test
 #### Checklist de restore
 
 - [ ] Senha restic disponível (arquivo ou cópia offline)
-- [ ] `sudo ./restore-restic.sh --list` mostra snapshots
+- [ ] `sudo msi-restore-restic --list` mostra snapshots
 - [ ] Teste em `/tmp/restore-test` ok
 - [ ] HD montado se for recolocar em `/media/music`
 - [ ] Se repo local sumiu: `--from-cloud` ou `rclone sync` do `restic-repo`
 ## Estratégia sugerida (família)
 
-1. **restic** diário → disco local **e/ou** nuvem (`backup-cloud.sh --payload restic`)  
+1. **restic** diário → disco local **e/ou** nuvem (`msi-backup-cloud --payload restic`)  
 2. Fail2Ban + updates sempre ligados  
 3. Notebook só na LAN; SSH só se precisar (ou VPN)  
 4. Evite espelhar arquivos soltos na nuvem (já estão no HD / Google Fotos)
@@ -232,8 +236,8 @@ restic restore latest --target /tmp/restore-test
 - [ ] `fail2ban-client status sshd` mostra jail ativa  
 - [ ] `unattended-upgrade --dry-run` ok  
 - [ ] Senha restic guardada offline  
-- [ ] `sudo ./backup-restic.sh` criou o 1º snapshot  
-- [ ] Teste de restore: `sudo ./restore-restic.sh --target /tmp/restore-test`  
+- [ ] `sudo msi-backup-restic` criou o 1º snapshot  
+- [ ] Teste de restore: `sudo msi-restore-restic --target /tmp/restore-test`  
 - [ ] HD montado (`findmnt /media/music`) antes dos jobs  
 
 ## Relação com rclone
@@ -246,4 +250,4 @@ restic restore latest --target /tmp/restore-test
 | Deduplicação | No repo restic | Forte |
 | Navegar no Drive | Repo opaco / zips | Precisa `restic mount` / restore |
 
-Para fotos da família, **restic + sync do repo na nuvem** é a rede de segurança; zip é alternativa simples. Restore: `sudo ./restore-restic.sh`.
+Para fotos da família, **restic + sync do repo na nuvem** é a rede de segurança; zip é alternativa simples. Restore: `sudo msi-restore-restic`.

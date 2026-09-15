@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# services/plex.sh — Instalação e configuração do Plex Media Server
+# services/plex.sh — Plex Media Server via Docker Compose (ADR-0001)
 # shellcheck disable=SC2154
+
+# shellcheck source=services/docker.sh
+source "${INSTALLER_ROOT}/services/docker.sh"
 
 _safe_media_symlink() {
   local target="$1"
@@ -33,86 +36,7 @@ ensure_openssh_sftp() {
   fi
 }
 
-install_plex() {
-  log_step "Instalando Plex"
-
-  if systemctl is-active --quiet plexmediaserver 2>/dev/null || dpkg -l plexmediaserver &>/dev/null; then
-    log_ok "Plex já instalado — atualizando se disponível"
-  fi
-
-  export DEBIAN_FRONTEND=noninteractive
-
-  # Método preferencial: repositório oficial Plex
-  if [[ ! -f /etc/apt/sources.list.d/plexmediaserver.list ]]; then
-    curl -fsSL https://downloads.plex.tv/plex-keys/PlexSign.key \
-      | gpg --dearmor -o /usr/share/keyrings/plex-archive-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main" \
-      > /etc/apt/sources.list.d/plexmediaserver.list
-    apt-get update -qq
-  fi
-
-  if ! apt-get install -y -qq plexmediaserver; then
-    log_warn "Falha via repositório — tentando pacote .deb direto"
-    if [[ "${OS_ARCH}" != "amd64" && "${OS_ARCH}" != "x86_64" ]]; then
-      die "Fallback .deb do Plex só está configurado para amd64 (arch=${OS_ARCH}). Instale manualmente ou use o repositório oficial."
-    fi
-    local tmp_deb
-    tmp_deb="$(mktemp /tmp/plex-XXXXXX.deb)"
-    local deb_url="${PLEX_DEB_URL}"
-    if ! curl -fsSL -o "${tmp_deb}" "${deb_url}"; then
-      rm -f "${tmp_deb}"
-      die "Não foi possível baixar o Plex Media Server"
-    fi
-    if ! apt-get install -y -qq "${tmp_deb}" && ! dpkg -i "${tmp_deb}"; then
-      rm -f "${tmp_deb}"
-      die "Falha ao instalar o pacote Plex (.deb)"
-    fi
-    apt-get install -f -y -qq || true
-    rm -f "${tmp_deb}"
-  fi
-
-  if ! dpkg -l plexmediaserver 2>/dev/null | grep -q '^ii'; then
-    die "Plex Media Server não está instalado após tentativas de instalação"
-  fi
-
-  # Adicionar plex ao grupo media e usuário
-  if id plex &>/dev/null; then
-    usermod -aG media plex 2>/dev/null || true
-    usermod -aG "${TARGET_USER}" plex 2>/dev/null || true
-  fi
-
-  # Atalhos estáveis sob /media/<nome> só se MUSIC/PHOTOS não estiverem já em /media/...
-  # Paths reais deste setup: /media/music/Musicas e /media/music/Fotos
-  if [[ -d "${MUSIC_ROOT}" ]]; then
-    if [[ "${PLEX_LIBRARY_NAME}" == *"/"* || -z "${PLEX_LIBRARY_NAME}" ]]; then
-      die "Nome de biblioteca Plex inválido: ${PLEX_LIBRARY_NAME}"
-    fi
-    if [[ "${MUSIC_ROOT}" != "/media/${PLEX_LIBRARY_NAME}" ]]; then
-      _safe_media_symlink "${MUSIC_ROOT}" "/media/${PLEX_LIBRARY_NAME}"
-    fi
-  fi
-
-  PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
-  PLEX_PHOTOS_LIBRARY_NAME="${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
-  if [[ -d "${PHOTOS_ROOT}" ]]; then
-    if [[ "${PLEX_PHOTOS_LIBRARY_NAME}" == *"/"* || -z "${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
-      die "Nome de biblioteca Plex Photos inválido: ${PLEX_PHOTOS_LIBRARY_NAME}"
-    fi
-    if [[ "${PHOTOS_ROOT}" != "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
-      _safe_media_symlink "${PHOTOS_ROOT}" "/media/${PLEX_PHOTOS_LIBRARY_NAME}"
-    fi
-  fi
-
-  # SFTP para sync do celular (FolderSync) → pastas no HD
-  ensure_openssh_sftp
-
-  service_enable_start plexmediaserver
-
-  if ! wait_for_port "${PORT_PLEX}" 45; then
-    log_warn "Plex instalado, mas a porta ${PORT_PLEX} ainda não respondeu"
-  fi
-
-  # Nota: criação automática da biblioteca exige claim token; documentamos o caminho
+_plex_library_hints() {
   mkdir -p "${STATE_DIR}"
   cat > "${STATE_DIR}/plex-library-hint.txt" <<EOF
 Bibliotecas Plex sugeridas:
@@ -134,23 +58,60 @@ Sync do celular (FolderSync / SFTP):
   sftp://$(get_local_ip) → ${PHOTOS_ROOT}/Camera (WhatsApp, Screenshots, …)
   O Plex detecta fotos novas automaticamente.
 EOF
+}
 
-  log_ok "Plex instalado — músicas: ${MUSIC_ROOT} · fotos: ${PHOTOS_ROOT}"
+install_plex() {
+  log_step "Instalando Plex (Docker)"
+  ensure_docker
+  write_compose_env
+
+  if [[ -d "${MUSIC_ROOT}" ]]; then
+    if [[ "${PLEX_LIBRARY_NAME}" == *"/"* || -z "${PLEX_LIBRARY_NAME}" ]]; then
+      die "Nome de biblioteca Plex inválido: ${PLEX_LIBRARY_NAME}"
+    fi
+    if [[ "${MUSIC_ROOT}" != "/media/${PLEX_LIBRARY_NAME}" ]]; then
+      _safe_media_symlink "${MUSIC_ROOT}" "/media/${PLEX_LIBRARY_NAME}"
+    fi
+  fi
+
+  PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
+  PLEX_PHOTOS_LIBRARY_NAME="${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
+  if [[ -d "${PHOTOS_ROOT}" ]]; then
+    if [[ "${PLEX_PHOTOS_LIBRARY_NAME}" == *"/"* || -z "${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
+      die "Nome de biblioteca Plex Photos inválido: ${PLEX_PHOTOS_LIBRARY_NAME}"
+    fi
+    if [[ "${PHOTOS_ROOT}" != "/media/${PLEX_PHOTOS_LIBRARY_NAME}" ]]; then
+      _safe_media_symlink "${PHOTOS_ROOT}" "/media/${PLEX_PHOTOS_LIBRARY_NAME}"
+    fi
+  fi
+
+  ensure_openssh_sftp
+
+  _stop_native_unit plexmediaserver
+  fuser -k "${PORT_PLEX}/tcp" 2>/dev/null || true
+  # Evitar chown -R em bibliotecas grandes (pode levar minutos); o s6 do LinuxServer
+  # ajusta o necessário no start com PUID/PGID.
+  chown "${TARGET_UID}:$(_media_gid)" "${PLEX_CONFIG_DIR}" 2>/dev/null || true
+
+  compose_up_service plex
+  wait_compose_healthy plex "${PORT_PLEX}" 120 || log_warn "Plex instalado, mas a porta ${PORT_PLEX} ainda não respondeu"
+  validate_http "Plex" "http://127.0.0.1:${PORT_PLEX}/identity" 15 || log_warn "Plex ainda inicializando"
+  _plex_library_hints
+  log_ok "Plex ativo (Docker) — músicas: ${MUSIC_ROOT} · fotos: ${PHOTOS_ROOT}"
 }
 
 update_plex() {
-  log_step "Atualizando Plex"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq --only-upgrade plexmediaserver || log_warn "Nenhuma atualização do Plex disponível"
-  systemctl restart plexmediaserver 2>/dev/null || true
+  log_step "Atualizando Plex (imagem estável)"
+  ensure_docker
+  compose_update_services plex
+  wait_compose_healthy plex "${PORT_PLEX}" 120 || true
   log_ok "Plex atualizado"
 }
 
 uninstall_plex() {
-  log_step "Removendo Plex"
-  systemctl stop plexmediaserver 2>/dev/null || true
-  systemctl disable plexmediaserver 2>/dev/null || true
+  log_step "Removendo Plex (Docker)"
+  compose_down_service plex
+  _stop_native_unit plexmediaserver
   export DEBIAN_FRONTEND=noninteractive
   apt-get remove -y -qq plexmediaserver 2>/dev/null || true
   apt-get purge -y -qq plexmediaserver 2>/dev/null || true
@@ -158,7 +119,6 @@ uninstall_plex() {
   rm -f /usr/share/keyrings/plex-archive-keyring.gpg
   [[ -L "/media/${PLEX_LIBRARY_NAME:-Músicas}" ]] && rm -f "/media/${PLEX_LIBRARY_NAME:-Músicas}"
   [[ -L "/media/${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}" ]] && rm -f "/media/${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
-  # NÃO remove /var/lib/plexmediaserver por padrão (dados do usuário)
   log_warn "Dados em ${PLEX_CONFIG_DIR} preservados. Remova manualmente se desejar."
   log_warn "Músicas e fotos no HD externo NÃO foram apagadas."
   log_ok "Plex removido"

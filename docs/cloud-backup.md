@@ -25,21 +25,22 @@ HD externo
 
 ## Scripts
 
-| Script | Função |
-|--------|--------|
-| `sudo ./setup-cloud-backup.sh` | Instala rclone, escolhe payload, agenda timer |
-| `sudo ./backup-cloud.sh` | Executa o backup agora |
-| `sudo ./backup-cloud.sh --dry-run` | Simula sem enviar |
-| `sudo ./backup-cloud.sh --payload restic` | Força modo restic |
-| `sudo ./backup-cloud.sh --payload zip` | Força modo zip |
-| `sudo ./backup-cloud.sh --photos-only` | Só fotos (modo zip) |
-| `sudo ./backup-cloud.sh --music-only` | Só músicas (modo zip) |
+| Script no repo | Comando global | Função |
+|----------------|----------------|--------|
+| `./setup-cloud-backup.sh` | `sudo msi-setup-cloud-backup` | Instala rclone, escolhe payload, agenda timer |
+| `./backup-cloud.sh` | `sudo msi-backup-cloud` | Executa o backup agora |
+| `./backup-cloud.sh --dry-run` | `sudo msi-backup-cloud --dry-run` | Simula sem enviar |
+| `./backup-cloud.sh --payload restic` | `sudo msi-backup-cloud --payload restic` | Força modo restic |
+| `./backup-cloud.sh --payload zip` | `sudo msi-backup-cloud --payload zip` | Força modo zip |
+| `./backup-cloud.sh --photos-only` | `sudo msi-backup-cloud --photos-only` | Só fotos (modo zip) |
+| `./backup-cloud.sh --music-only` | `sudo msi-backup-cloud --music-only` | Só músicas (modo zip) |
 
 ## Setup rápido
 
 ```bash
 cd music-server-installer
-sudo ./setup-cloud-backup.sh
+sudo msi-setup-cloud-backup
+# equivalente: sudo ./setup-cloud-backup.sh
 ```
 
 O assistente:
@@ -53,7 +54,7 @@ O assistente:
 Se escolher **restic**, configure também o repositório:
 
 ```bash
-sudo ./setup-security.sh --only-restic
+sudo msi-setup-security --only-restic
 ```
 
 Use um path **local** (ex.: `/mnt/backup/restic-repo` ou pasta no próprio HD) para o `backup-cloud.sh` espelhar o repo na nuvem.  
@@ -77,10 +78,10 @@ Em servidor **sem interface gráfica**, responda **n** no auto config e siga as 
 Na nuvem você guarda o **histórico criptografado**, não uma segunda cópia navegável das pastas. Restore:
 
 ```bash
-sudo ./restore-restic.sh --list
-sudo ./restore-restic.sh --target /tmp/restore-test
+sudo msi-restore-restic --list
+sudo msi-restore-restic --target /tmp/restore-test
 # repo local sumiu:
-sudo ./restore-restic.sh --from-cloud --target /tmp/restore-test --photos-only
+sudo msi-restore-restic --from-cloud --target /tmp/restore-test --photos-only
 ```
 
 Detalhes: **[security.md](security.md)** (seção Restore).
@@ -143,7 +144,7 @@ BACKUP_SCHEDULE="*-*-* 17:00:00"
 Forçar fora da janela:
 
 ```bash
-sudo ./backup-cloud.sh --ignore-window
+sudo msi-backup-cloud --ignore-window
 ```
 
 ## Rate limit (Google Drive)
@@ -174,7 +175,7 @@ Rodar na hora:
 ```bash
 sudo systemctl start music-server-cloud-backup.service
 # ou:
-sudo ./backup-cloud.sh --ignore-window
+sudo msi-backup-cloud --ignore-window
 ```
 
 Desativar:
@@ -213,7 +214,7 @@ O repo restic é `root:root` com pastas `700`. O script sobe o repo como **root*
 
 ```bash
 sudo ls -la /media/backup-restic
-sudo ./backup-cloud.sh --dry-run --payload restic
+sudo msi-backup-cloud --dry-run --payload restic
 ```
 
 **Repo restic no disco do sistema**  
@@ -222,16 +223,16 @@ Se `RESTIC_REPOSITORY` for `/media/backup-restic` (ou similar em `/`), o snapsho
 **HD desmontado**
 
 ```bash
-sudo ./mount.sh
-sudo ./backup-cloud.sh
+sudo msi-mount
+sudo msi-backup-cloud
 ```
 
 **restic não configurado**
 
 ```bash
-sudo ./setup-security.sh --only-restic
+sudo msi-setup-security --only-restic
 # ou temporariamente:
-sudo ./backup-cloud.sh --payload zip
+sudo msi-backup-cloud --payload zip
 ```
 
 **Rate limit Google (`User rate limit exceeded`)**  

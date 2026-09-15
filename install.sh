@@ -6,6 +6,8 @@ INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"
+# shellcheck source=services/docker.sh
+source "${INSTALLER_ROOT}/services/docker.sh"
 # shellcheck source=services/mountdisk.sh
 source "${INSTALLER_ROOT}/services/mountdisk.sh"
 # shellcheck source=services/permissions.sh
@@ -159,30 +161,33 @@ main() {
   ensure_media_group_early
   update_system
   install_dependencies
+  ensure_docker
   configure_ntfs_mount
   create_music_folders
+  write_compose_env
 
-  # --- Serviços: falha de um não aborta os demais ---
-  if [[ "${INSTALL_PLEX}" == "true" ]]; then
-    run_install_step "Plex" install_plex
+  # --- Serviços Docker (deps primeiro): falha de um não aborta os demais ---
+  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
+    run_install_step "FlareSolverr" install_flaresolverr
   fi
   if [[ "${INSTALL_QBITTORRENT}" == "true" ]]; then
     run_install_step "qBittorrent" install_qbittorrent
   fi
-  if [[ "${INSTALL_LIDARR}" == "true" ]]; then
-    run_install_step "Lidarr" install_lidarr
-  fi
   if [[ "${INSTALL_PROWLARR}" == "true" ]]; then
     run_install_step "Prowlarr" install_prowlarr
   fi
-  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
-    run_install_step "FlareSolverr" install_flaresolverr
+  if [[ "${INSTALL_LIDARR}" == "true" ]]; then
+    run_install_step "Lidarr" install_lidarr
+  fi
+  if [[ "${INSTALL_PLEX}" == "true" ]]; then
+    run_install_step "Plex" install_plex
   fi
 
   run_install_step "Permissões" configure_permissions
   run_install_step "Grupo media" reapply_media_group
   run_install_step "Firewall" configure_firewall
 
+  DEPLOY_MODE=docker
   save_state
 
   # Ligar Lidarr ↔ Prowlarr ↔ qBit ↔ FlareSolverr (idempotente; precisa do state)
@@ -192,7 +197,7 @@ main() {
 
   echo
   if [[ ${#INSTALL_ERRORS[@]} -eq 0 ]]; then
-    log_ok "Finalizado"
+    log_ok "Finalizado (Docker Compose)"
   else
     log_warn "Finalizado com avisos"
   fi

@@ -1,6 +1,7 @@
 # How-to: baixar músicas com Lidarr + Prowlarr + FlareSolverr + qBittorrent + Plex
 
-Guia prático para o stack do **Music Server Installer** ([diagrama](arquitetura-musica.png)).
+Guia prático para o stack do **Music Server Installer** ([diagrama](arquitetura-musica.png)).  
+Runtime: **Docker Compose** — guia: [docker.md](docker.md) · [ADR-0001](adrs/ADR-0001-migracao-systemd-para-docker.md).
 
 ## Visão geral
 
@@ -42,19 +43,19 @@ grep MUSIC_ROOT /var/lib/music-server-installer/install.state
 
 ### Wiring automático
 
-Após o `install.sh` (ou a qualquer momento):
+Após o `install.sh` / `msi-install` (ou a qualquer momento):
 
 ```bash
-sudo ./setup-media-stack.sh
-# ou: sudo msi-setup-media
+sudo msi-setup-media
+# equivalente: sudo ./setup-media-stack.sh
 ```
 
 Isso configura (idempotente):
 
 - Root folder `Artistas/` no Lidarr
-- Download client qBittorrent no Lidarr
-- App Lidarr no Prowlarr (Full Sync)
-- Proxy FlareSolverr no Prowlarr
+- Download client qBittorrent no Lidarr (hostname Docker `qbittorrent`)
+- App Lidarr no Prowlarr (Full Sync → `http://lidarr:8686`)
+- Proxy FlareSolverr no Prowlarr (`http://flaresolverr:8191/`)
 - Failed download handling + blocklist de nomes-isca
 - Tamanho mínimo (~2 MB) nas quality definitions
 - Exclusões de arquivos perigosos no qBittorrent
@@ -62,7 +63,7 @@ Isso configura (idempotente):
 Se o Test do qBittorrent falhar por senha:
 
 ```bash
-sudo ./setup-media-stack.sh --qbit-password 'SUA_SENHA'
+sudo msi-setup-media --qbit-password 'SUA_SENHA'
 ```
 
 ---
@@ -72,14 +73,14 @@ sudo ./setup-media-stack.sh --qbit-password 'SUA_SENHA'
 1. Se Lidarr/Prowlarr pedirem login e você ainda não criou usuário:
 
 ```bash
-sudo ./fix-servarr-auth.sh
+sudo msi-fix-servarr-auth
 ```
 
 2. Em cada serviço: **Settings → General → Security** → **Forms** + usuário/senha.
-3. qBittorrent: usuário `admin` — senha temporária:
+3. qBittorrent: usuário `admin` — senha inicial nos logs do container:
 
 ```bash
-journalctl -u qbittorrent-nox@$USER -n 30 --no-pager | grep -i senha
+docker logs music-qbittorrent 2>&1 | grep -iE 'password|senha'
 ```
 
 ---
@@ -99,7 +100,7 @@ Limite: o filtro age pelo **nome do arquivo** no torrent (não detecta malware r
 
 ### Lidarr
 
-- Failed / completed download handling (via `setup-media-stack.sh`)
+- Failed / completed download handling (via `msi-setup-media`)
 - Release profile `MSI-blocklist-armadilhas` (ex.: BROADCAST, SODAPOP, …)
 - `minSize` ≥ 2 MB nas quality definitions (reduz fakes minúsculos)
 
@@ -108,7 +109,7 @@ Limite: o filtro age pelo **nome do arquivo** no torrent (não detecta malware r
 ## 2. Prowlarr — indexadores (música)
 
 1. Abra `http://SEU_IP:9696`.
-2. Confirme o proxy **FlareSolverr** em **Settings → Indexers → Indexer Proxies** (ou rode `setup-media-stack.sh`).
+2. Confirme o proxy **FlareSolverr** em **Settings → Indexers → Indexer Proxies** (ou rode `msi-setup-media`).
 3. **Indexers → Add Indexer**: use fontes de **música** (públicas ou privadas que você tenha conta). Evite indexadores só de filme/série (YTS, EZTV, etc.).
 4. Em indexadores com Cloudflare, associe o proxy FlareSolverr.
 5. **Settings → Apps → Lidarr** deve existir após o wiring (Full Sync).
@@ -124,7 +125,7 @@ Limite: o filtro age pelo **nome do arquivo** no torrent (não detecta malware r
 Já criados pelo wiring. Confira:
 
 - **Media Management → Root Folders:** `.../Musicas/Artistas`
-- **Download Clients → qBittorrent:** `127.0.0.1:8080`, category `lidarr`
+- **Download Clients → qBittorrent:** host `qbittorrent`, porta `8080`, category `lidarr`
 
 ### 3.2 Pedir o primeiro álbum
 
@@ -141,6 +142,8 @@ Já criados pelo wiring. Confira:
 
 Opcional: Lidarr **Connect → Plex** (token Plex).
 
+O container `music-plex` usa **`network_mode: host`** + `PLEX_ADVERTISE_IP` para o app mobile na LAN. Detalhes: [docker.md § Plex](docker.md#plex-e-app-mobile).
+
 ---
 
 ## 5. Checklist (se nada baixa)
@@ -153,8 +156,9 @@ Opcional: Lidarr **Connect → Plex** (token Plex).
 
 ```bash
 findmnt /media/music
-systemctl status lidarr prowlarr flaresolverr 'qbittorrent-nox@*' plexmediaserver --no-pager
-sudo ./setup-media-stack.sh -y
+docker compose ps
+docker compose logs --tail 40 lidarr prowlarr qbittorrent flaresolverr
+sudo msi-setup-media -y
 ```
 
 ---
@@ -177,10 +181,24 @@ sudo ./setup-media-stack.sh -y
 | `9696`  | Prowlarr     |
 | `32400` | Plex         |
 
+## Comandos úteis (`msi-*` e Compose)
+
+Após `sudo msi-link-global` (ou `sudo ./link-global.sh`):
+
 ```bash
-sudo ./install.sh
-sudo ./setup-media-stack.sh
-sudo ./fix-servarr-auth.sh
-sudo ./update.sh
-sudo ./uninstall.sh
+sudo msi-install              # instalação (Docker)
+sudo msi-migrate-docker -y    # migra stack systemd legado → Docker
+sudo msi-setup-media          # wiring Lidarr/Prowlarr/qBit/FlareSolverr
+sudo msi-fix-servarr-auth     # corrige auth HTTP 500
+sudo msi-update               # pull da última imagem estável
+sudo msi-uninstall            # remove containers (preserva músicas)
+sudo msi-mount                # remonta o HD
+
+# Na pasta do repositório:
+docker compose ps
+docker compose logs -f plex
+docker compose restart lidarr
+docker compose pull && docker compose up -d
 ```
+
+Guia Compose: **[docker.md](docker.md)**. Lista `msi-*`: `msi-link-global --list` · [README](../README.md#comandos-msi--e-compose).

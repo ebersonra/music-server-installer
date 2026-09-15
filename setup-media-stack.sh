@@ -122,12 +122,46 @@ _ensure_lidarr_root_folder() {
 _ensure_lidarr_qbittorrent() {
   local base="$1" key="$2"
   local port="${PORT_QBITTORRENT}"
+  local qbit_host="127.0.0.1"
+  if [[ "${DEPLOY_MODE:-docker}" == "docker" ]]; then
+    qbit_host="${DOCKER_HOST_QBITTORRENT:-qbittorrent}"
+  fi
   local clients
   clients="$(_api_get "${base}" "${key}" "/api/v1/downloadclient" 2>/dev/null || echo '[]')"
 
-  if echo "${clients}" | jq -e 'map(select(.implementation=="QBittorrent" or (.name|ascii_downcase|contains("qbit")))) | length > 0' >/dev/null 2>&1; then
-    log_ok "Lidarr já tem download client qBittorrent"
-    return 0
+  local existing
+  existing="$(echo "${clients}" | jq -c '[.[] | select(.implementation=="QBittorrent" or (.name|ascii_downcase|contains("qbit")))][0] // empty')"
+
+  if [[ -n "${existing}" && "${existing}" != "null" ]]; then
+    local cur_host
+    cur_host="$(echo "${existing}" | jq -r '.fields[] | select(.name=="host") | .value // empty')"
+    if [[ "${cur_host}" == "${qbit_host}" ]]; then
+      log_ok "Lidarr já tem download client qBittorrent (${qbit_host})"
+      return 0
+    fi
+    # Atualiza host (migração systemd → Docker)
+    _resolve_qbit_password
+    local id body
+    id="$(echo "${existing}" | jq -r '.id')"
+    body="$(echo "${existing}" | jq -c \
+      --arg host "${qbit_host}" \
+      --argjson port "${port}" \
+      --arg pass "${QBIT_PASSWORD}" \
+      '
+      .fields |= map(
+          if .name == "host" then .value = $host
+          elif .name == "port" then .value = $port
+          elif .name == "password" and ($pass|length) > 0 then .value = $pass
+          else .
+          end
+        )
+      ')"
+    if _api_put "${base}" "${key}" "/api/v1/downloadclient/${id}" "${body}" >/dev/null 2>&1; then
+      log_ok "Lidarr: qBittorrent host atualizado → ${qbit_host}"
+      return 0
+    fi
+    log_warn "Não foi possível atualizar host do qBittorrent no Lidarr"
+    return 1
   fi
 
   local schema
@@ -143,7 +177,7 @@ _ensure_lidarr_qbittorrent() {
 
   local body
   body="$(echo "${template}" | jq -c \
-    --arg host "127.0.0.1" \
+    --arg host "${qbit_host}" \
     --argjson port "${port}" \
     --arg user "admin" \
     --arg pass "${QBIT_PASSWORD}" \
@@ -166,7 +200,7 @@ _ensure_lidarr_qbittorrent() {
     ')"
 
   if _api_post "${base}" "${key}" "/api/v1/downloadclient" "${body}" >/dev/null 2>&1; then
-    log_ok "Lidarr: download client qBittorrent adicionado"
+    log_ok "Lidarr: download client qBittorrent adicionado (${qbit_host})"
   else
     log_warn "Falha ao adicionar qBittorrent no Lidarr (senha WebUI?). Use --qbit-password ou configure na UI"
     return 1
@@ -271,12 +305,48 @@ _ensure_lidarr_min_sizes() {
 
 _ensure_prowlarr_lidarr_app() {
   local prow_base="$1" prow_key="$2" lidarr_base="$3" lidarr_key="$4"
+  local lidarr_url="${lidarr_base}"
+  local prow_url="http://127.0.0.1:${PORT_PROWLARR}"
+  if [[ "${DEPLOY_MODE:-docker}" == "docker" ]]; then
+    lidarr_url="http://${DOCKER_HOST_LIDARR:-lidarr}:${PORT_LIDARR}"
+    prow_url="http://${DOCKER_HOST_PROWLARR:-prowlarr}:${PORT_PROWLARR}"
+  fi
+
   local apps
   apps="$(_api_get "${prow_base}" "${prow_key}" "/api/v1/applications" 2>/dev/null || echo '[]')"
 
-  if echo "${apps}" | jq -e 'map(select(.implementation=="Lidarr" or (.name|ascii_downcase|contains("lidarr")))) | length > 0' >/dev/null 2>&1; then
-    log_ok "Prowlarr já tem app Lidarr"
-    return 0
+  local existing
+  existing="$(echo "${apps}" | jq -c '[.[] | select(.implementation=="Lidarr" or (.name|ascii_downcase|contains("lidarr")))][0] // empty')"
+
+  if [[ -n "${existing}" && "${existing}" != "null" ]]; then
+    local cur
+    cur="$(echo "${existing}" | jq -r '.fields[] | select(.name|test("^baseUrl$"; "i")) | .value // empty')"
+    if [[ "${cur}" == "${lidarr_url}" ]]; then
+      log_ok "Prowlarr já tem app Lidarr (${lidarr_url})"
+      return 0
+    fi
+    local id body
+    id="$(echo "${existing}" | jq -r '.id')"
+    body="$(echo "${existing}" | jq -c \
+      --arg prow "${prow_url}" \
+      --arg lidarr "${lidarr_url}" \
+      --arg apikey "${lidarr_key}" \
+      '
+      .syncLevel = "fullSync"
+      | .fields |= map(
+          if (.name | test("prowlarrUrl|ProwlarrUrl"; "i")) then .value = $prow
+          elif (.name | test("^baseUrl$"; "i")) then .value = $lidarr
+          elif (.name | test("apiKey"; "i")) then .value = $apikey
+          else .
+          end
+        )
+      ')"
+    if _api_put "${prow_base}" "${prow_key}" "/api/v1/applications/${id}" "${body}" >/dev/null 2>&1; then
+      log_ok "Prowlarr: app Lidarr atualizado → ${lidarr_url}"
+      return 0
+    fi
+    log_warn "Não foi possível atualizar app Lidarr no Prowlarr"
+    return 1
   fi
 
   local schema
@@ -290,8 +360,8 @@ _ensure_prowlarr_lidarr_app() {
 
   local body
   body="$(echo "${template}" | jq -c \
-    --arg prow "http://127.0.0.1:${PORT_PROWLARR}" \
-    --arg lidarr "${lidarr_base}" \
+    --arg prow "${prow_url}" \
+    --arg lidarr "${lidarr_url}" \
     --arg apikey "${lidarr_key}" \
     '
     .name = "Lidarr"
@@ -306,7 +376,7 @@ _ensure_prowlarr_lidarr_app() {
     ')"
 
   if _api_post "${prow_base}" "${prow_key}" "/api/v1/applications" "${body}" >/dev/null 2>&1; then
-    log_ok "Prowlarr: app Lidarr (Full Sync) adicionado"
+    log_ok "Prowlarr: app Lidarr (Full Sync) adicionado (${lidarr_url})"
   else
     log_warn "Falha ao adicionar Lidarr no Prowlarr — configure em Settings → Apps"
     return 1
@@ -317,14 +387,41 @@ _ensure_prowlarr_flaresolverr() {
   local prow_base="$1" prow_key="$2"
   local host="${FLARESOLVERR_HOST:-127.0.0.1}"
   local port="${PORT_FLARESOLVERR:-8191}"
+  if [[ "${DEPLOY_MODE:-docker}" == "docker" ]]; then
+    host="${DOCKER_HOST_FLARESOLVERR:-flaresolverr}"
+  fi
   local url="http://${host}:${port}/"
 
   local proxies
   proxies="$(_api_get "${prow_base}" "${prow_key}" "/api/v1/indexerProxy" 2>/dev/null || echo '[]')"
 
-  if echo "${proxies}" | jq -e 'map(select(.implementation=="FlareSolverr" or (.name|ascii_downcase|contains("flare")))) | length > 0' >/dev/null 2>&1; then
-    log_ok "Prowlarr já tem proxy FlareSolverr"
-    return 0
+  local existing
+  existing="$(echo "${proxies}" | jq -c '[.[] | select(.implementation=="FlareSolverr" or (.name|ascii_downcase|contains("flare")))][0] // empty')"
+
+  if [[ -n "${existing}" && "${existing}" != "null" ]]; then
+    local cur
+    cur="$(echo "${existing}" | jq -r '.fields[] | select(.name|test("host|url|baseUrl"; "i")) | .value // empty' | head -1)"
+    if [[ "${cur}" == "${url}" ]]; then
+      log_ok "Prowlarr já tem proxy FlareSolverr (${url})"
+      return 0
+    fi
+    local id body
+    id="$(echo "${existing}" | jq -r '.id')"
+    body="$(echo "${existing}" | jq -c \
+      --arg url "${url}" \
+      '
+      .fields |= map(
+          if (.name | test("host|url|baseUrl"; "i")) then .value = $url
+          else .
+          end
+        )
+      ')"
+    if _api_put "${prow_base}" "${prow_key}" "/api/v1/indexerProxy/${id}" "${body}" >/dev/null 2>&1; then
+      log_ok "Prowlarr: proxy FlareSolverr atualizado → ${url}"
+      return 0
+    fi
+    log_warn "Não foi possível atualizar FlareSolverr no Prowlarr"
+    return 1
   fi
 
   local schema
@@ -360,14 +457,15 @@ _apply_qbit_exclusions_from_state() {
   if [[ "${INSTALL_QBITTORRENT}" != "true" ]]; then
     return 0
   fi
-  if [[ -z "${TARGET_HOME:-}" ]]; then
+  local conf=""
+  if [[ -n "${QBITTORRENT_CONFIG_DIR:-}" && -f "${QBITTORRENT_CONFIG_DIR}/qBittorrent/qBittorrent.conf" ]]; then
+    conf="${QBITTORRENT_CONFIG_DIR}/qBittorrent/qBittorrent.conf"
+  elif [[ -n "${TARGET_HOME:-}" && -f "${TARGET_HOME}/.config/qBittorrent/qBittorrent.conf" ]]; then
+    conf="${TARGET_HOME}/.config/qBittorrent/qBittorrent.conf"
+  fi
+  if [[ -z "${conf}" || ! -f "${conf}" ]]; then
     return 0
   fi
-  local conf="${TARGET_HOME}/.config/qBittorrent/qBittorrent.conf"
-  if [[ ! -f "${conf}" ]]; then
-    return 0
-  fi
-  # Reusa helper se qbittorrent.sh estiver sourced; senão inline mínimo
   if declare -f _qbit_apply_excluded_file_names >/dev/null; then
     _qbit_apply_excluded_file_names "${conf}"
   else
@@ -395,12 +493,18 @@ main() {
     die "Nenhuma instalação encontrada (${STATE_FILE}). Execute ./install.sh primeiro."
   fi
 
+  # Hostnames Docker para wiring interno
+  # shellcheck source=services/docker.sh
+  source "${INSTALLER_ROOT}/services/docker.sh" 2>/dev/null || true
+  DEPLOY_MODE="${DEPLOY_MODE:-docker}"
+
   MUSIC_ROOT="${MUSIC_ROOT:-${MOUNT_POINT}/Musicas}"
   local artistas="${MUSIC_ROOT}/Artistas"
   local lidarr_base="http://127.0.0.1:${PORT_LIDARR}"
   local prow_base="http://127.0.0.1:${PORT_PROWLARR}"
 
   if [[ "${FROM_INSTALL}" != "true" ]]; then
+    echo -e "  Deploy:       ${DEPLOY_MODE}"
     echo -e "  Lidarr:       ${INSTALL_LIDARR}"
     echo -e "  Prowlarr:     ${INSTALL_PROWLARR}"
     echo -e "  qBittorrent:  ${INSTALL_QBITTORRENT}"
@@ -421,7 +525,11 @@ main() {
     if ! _wait_http "${lidarr_base}/ping" 90 && ! _wait_http "${lidarr_base}" 30; then
       log_warn "Lidarr não respondeu a tempo"
     else
-      lidarr_key="$(_read_api_key "${LIDARR_CONFIG_DIR}/config.xml")"
+      lidarr_key="$(_read_api_key "${LIDARR_CONFIG_DIR}/config.xml" || true)"
+      if [[ -z "${lidarr_key}" && -f /var/lib/lidarr/config.xml ]]; then
+        LIDARR_CONFIG_DIR="/var/lib/lidarr"
+        lidarr_key="$(_read_api_key "${LIDARR_CONFIG_DIR}/config.xml" || true)"
+      fi
       if [[ -z "${lidarr_key}" ]]; then
         log_warn "ApiKey do Lidarr não encontrada em ${LIDARR_CONFIG_DIR}/config.xml"
       else
@@ -439,7 +547,11 @@ main() {
     if ! _wait_http "${prow_base}/ping" 90 && ! _wait_http "${prow_base}" 30; then
       log_warn "Prowlarr não respondeu a tempo"
     else
-      prow_key="$(_read_api_key "${PROWLARR_CONFIG_DIR}/config.xml")"
+      prow_key="$(_read_api_key "${PROWLARR_CONFIG_DIR}/config.xml" || true)"
+      if [[ -z "${prow_key}" && -f /var/lib/prowlarr/config.xml ]]; then
+        PROWLARR_CONFIG_DIR="/var/lib/prowlarr"
+        prow_key="$(_read_api_key "${PROWLARR_CONFIG_DIR}/config.xml" || true)"
+      fi
       if [[ -z "${prow_key}" ]]; then
         log_warn "ApiKey do Prowlarr não encontrada"
       else
@@ -447,7 +559,8 @@ main() {
           _ensure_prowlarr_lidarr_app "${prow_base}" "${prow_key}" "${lidarr_base}" "${lidarr_key}" || true
         fi
         if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
-          if _wait_http "http://${FLARESOLVERR_HOST:-127.0.0.1}:${PORT_FLARESOLVERR}" 60; then
+          # Healthcheck via porta publicada no host
+          if _wait_http "http://127.0.0.1:${PORT_FLARESOLVERR}" 60; then
             _ensure_prowlarr_flaresolverr "${prow_base}" "${prow_key}" || true
           else
             log_warn "FlareSolverr não respondeu — proxy não configurado"

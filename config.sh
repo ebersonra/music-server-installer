@@ -3,8 +3,12 @@
 # shellcheck disable=SC2034
 
 # Versão do instalador
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.2.0"
 INSTALLER_NAME="Music Server Installer"
+
+# Runtime dos serviços de mídia (ADR-0001)
+# docker = Docker Compose (padrão) · systemd = legado (somente migração)
+DEPLOY_MODE="docker"
 
 # Diretório base do projeto (definido por quem faz source)
 : "${INSTALLER_ROOT:=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)}"
@@ -69,11 +73,13 @@ PLEX_DEB_URL="https://downloads.plex.tv/plex-media-server-new/1.41.3.9314-a0bfb8
 SERVARR_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2009837CBFFD68F45FBED23B7F631A8B8F0E6E2E"
 SERVARR_LIST_URL="https://apt.servarr.com/debian"
 
-# Paths de config dos serviços
-PLEX_CONFIG_DIR="/var/lib/plexmediaserver"
-LIDARR_CONFIG_DIR="/var/lib/lidarr"
-PROWLARR_CONFIG_DIR="/var/lib/prowlarr"
-QBITTORRENT_CONFIG_DIR=""  # definido após TARGET_HOME
+# Paths de config dos serviços (Docker usa /var/lib/music-server/* em install limpo;
+# migrate-to-docker.sh reutiliza paths nativos quando já existem)
+DOCKER_DATA_ROOT="/var/lib/music-server"
+PLEX_CONFIG_DIR="${DOCKER_DATA_ROOT}/plex"
+LIDARR_CONFIG_DIR="${DOCKER_DATA_ROOT}/lidarr"
+PROWLARR_CONFIG_DIR="${DOCKER_DATA_ROOT}/prowlarr"
+QBITTORRENT_CONFIG_DIR=""  # definido após TARGET_HOME / write_compose_env
 FLARESOLVERR_CONFIG_DIR="/var/lib/flaresolverr"
 
 # Dependências APT
@@ -90,6 +96,7 @@ COMMON_DEPS=(
   unzip
   sqlite3
   openssh-server
+  docker.io
 )
 
 # Cores (podem ser desabilitadas com NO_COLOR=1)

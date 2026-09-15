@@ -6,6 +6,8 @@ INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"
+# shellcheck source=services/docker.sh
+source "${INSTALLER_ROOT}/services/docker.sh"
 # shellcheck source=services/mountdisk.sh
 source "${INSTALLER_ROOT}/services/mountdisk.sh"
 # shellcheck source=services/firewall.sh

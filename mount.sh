@@ -298,8 +298,9 @@ main() {
 
   show_status
   log_ok "Disco pronto"
-  echo -e "${C_DIM}Serviços não foram reinstalados. Se Lidarr/Plex não veem a pasta, reinicie-os:${C_RESET}"
-  echo -e "${C_DIM}  sudo systemctl restart lidarr plexmediaserver 'qbittorrent-nox@${TARGET_USER}'${C_RESET}"
+  echo -e "${C_DIM}Serviços não foram reinstalados. Se Lidarr/Plex não veem a pasta, reinicie os containers:${C_RESET}"
+  echo -e "${C_DIM}  cd ${INSTALLER_ROOT} && docker compose restart lidarr plex qbittorrent${C_RESET}"
+  echo -e "${C_DIM}  # ou: sudo msi-update --skip-system-update   # pull + recreate se preferir${C_RESET}"
   echo
 }
 

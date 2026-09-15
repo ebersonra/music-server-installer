@@ -1,0 +1,136 @@
+# Music Server — Docker Compose
+# ADR-0001 · Guia: docs/docker.md · Versionamento: docs/docker-versioning.md
+#
+# Uso:
+#   cp .env.example .env   # ajuste paths / PUID / PLEX_ADVERTISE_IP
+#   docker compose pull && docker compose up -d
+#
+# Um serviço por vez:
+#   docker compose up -d flaresolverr
+#   docker compose up -d qbittorrent
+#   ...
+#
+# Plex usa network_mode: host (discovery / app mobile). Demais serviços: bridge music-server.
+
+name: music-server
+
+services:
+  flaresolverr:
+    image: ${FLARESOLVERR_IMAGE}:${FLARESOLVERR_TAG}
+    container_name: music-flaresolverr
+    environment:
+      - LOG_LEVEL=${FLARESOLVERR_LOG_LEVEL:-info}
+      - LOG_HTML=${FLARESOLVERR_LOG_HTML:-false}
+      - CAPTCHA_SOLVER=${FLARESOLVERR_CAPTCHA_SOLVER:-none}
+      - TZ=${TZ:-America/Sao_Paulo}
+    ports:
+      - "127.0.0.1:${PORT_FLARESOLVERR:-8191}:8191"
+    restart: unless-stopped
+    networks:
+      - music-server
+
+  qbittorrent:
+    image: ${QBITTORRENT_IMAGE}:${QBITTORRENT_TAG}
+    container_name: music-qbittorrent
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/Sao_Paulo}
+      - WEBUI_PORT=${PORT_QBITTORRENT:-8080}
+      - TORRENTING_PORT=${QBIT_TORRENTING_PORT:-6881}
+    volumes:
+      # LinuxServer: /config/qBittorrent/qBittorrent.conf
+      - ${QBITTORRENT_CONFIG_DIR}:/config
+      # Mesmo path do host (config nativa usa caminhos absolutos)
+      - ${MOUNT_POINT}:${MOUNT_POINT}
+    ports:
+      - "${PORT_QBITTORRENT:-8080}:8080"
+      - "${QBIT_TORRENTING_PORT:-6881}:${QBIT_TORRENTING_PORT:-6881}"
+      - "${QBIT_TORRENTING_PORT:-6881}:${QBIT_TORRENTING_PORT:-6881}/udp"
+    restart: unless-stopped
+    networks:
+      - music-server
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  prowlarr:
+    image: ${PROWLARR_IMAGE}:${PROWLARR_TAG}
+    container_name: music-prowlarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/Sao_Paulo}
+    volumes:
+      - ${PROWLARR_CONFIG_DIR}:/config
+    ports:
+      - "${PORT_PROWLARR:-9696}:9696"
+    depends_on:
+      flaresolverr:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - music-server
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9696/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+  lidarr:
+    image: ${LIDARR_IMAGE}:${LIDARR_TAG}
+    container_name: music-lidarr
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/Sao_Paulo}
+    volumes:
+      - ${LIDARR_CONFIG_DIR}:/config
+      - ${MOUNT_POINT}:${MOUNT_POINT}
+    ports:
+      - "${PORT_LIDARR:-8686}:8686"
+    depends_on:
+      - qbittorrent
+      - prowlarr
+    restart: unless-stopped
+    networks:
+      - music-server
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8686/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  plex:
+    image: ${PLEX_IMAGE}:${PLEX_TAG}
+    container_name: music-plex
+    # Host network: discovery GDM + app mobile na LAN (bridge quebra o anúncio do IP)
+    network_mode: host
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-America/Sao_Paulo}
+      - VERSION=docker
+      - PLEX_CLAIM=${PLEX_CLAIM:-}
+      - ADVERTISE_IP=${PLEX_ADVERTISE_IP:-}
+      - ALLOWED_NETWORKS=${PLEX_ALLOWED_NETWORKS:-192.168.0.0/16,10.0.0.0/8,172.16.0.0/12}
+    volumes:
+      - ${PLEX_CONFIG_DIR}:/config
+      - ${MOUNT_POINT}:${MOUNT_POINT}:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsSk", "http://127.0.0.1:32400/identity"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+networks:
+  music-server:
+    name: music-server
+    driver: bridge

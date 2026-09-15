@@ -6,6 +6,8 @@ INSTALLER_ROOT="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=common.sh
 source "${INSTALLER_ROOT}/common.sh"
+# shellcheck source=services/docker.sh
+source "${INSTALLER_ROOT}/services/docker.sh"
 # shellcheck source=services/plex.sh
 source "${INSTALLER_ROOT}/services/plex.sh"
 # shellcheck source=services/lidarr.sh
@@ -21,7 +23,7 @@ usage() {
   cat <<EOF
 Uso: sudo ./update.sh [opções]
 
-Atualiza os serviços previamente instalados pelo install.sh.
+Atualiza as imagens Docker (última release estável) dos serviços instalados.
 
 Opções:
   -y, --yes              Confirmar automaticamente
@@ -89,20 +91,20 @@ main() {
     apt-get update -qq
   fi
 
-  if [[ "${INSTALL_PLEX}" == "true" ]]; then
-    update_plex
-  fi
-  if [[ "${INSTALL_QBITTORRENT}" == "true" ]]; then
-    update_qbittorrent
-  fi
-  if [[ "${INSTALL_LIDARR}" == "true" ]]; then
-    update_lidarr
-  fi
-  if [[ "${INSTALL_PROWLARR}" == "true" ]]; then
-    update_prowlarr
-  fi
-  if [[ "${INSTALL_FLARESOLVERR}" == "true" ]]; then
-    update_flaresolverr
+  ensure_docker
+  write_compose_env
+
+  # Atualização = pull da última tag estável + recreate
+  local to_update=()
+  [[ "${INSTALL_FLARESOLVERR}" == "true" ]] && to_update+=(flaresolverr)
+  [[ "${INSTALL_QBITTORRENT}" == "true" ]] && to_update+=(qbittorrent)
+  [[ "${INSTALL_PROWLARR}" == "true" ]] && to_update+=(prowlarr)
+  [[ "${INSTALL_LIDARR}" == "true" ]] && to_update+=(lidarr)
+  [[ "${INSTALL_PLEX}" == "true" ]] && to_update+=(plex)
+
+  if [[ ${#to_update[@]} -gt 0 ]]; then
+    log_step "Pull + recreate (tags estáveis)"
+    compose_update_services "${to_update[@]}"
   fi
 
   # Atualizar versão no estado (valores com quoting seguro)
@@ -140,6 +142,11 @@ main() {
       printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"
       printf 'INSTALL_QBITTORRENT=%q\n' "${INSTALL_QBITTORRENT}"
       printf 'INSTALL_FLARESOLVERR=%q\n' "${INSTALL_FLARESOLVERR:-false}"
+      printf 'DEPLOY_MODE=%q\n' "${DEPLOY_MODE:-docker}"
+      printf 'LIDARR_CONFIG_DIR=%q\n' "${LIDARR_CONFIG_DIR}"
+      printf 'PROWLARR_CONFIG_DIR=%q\n' "${PROWLARR_CONFIG_DIR}"
+      printf 'QBITTORRENT_CONFIG_DIR=%q\n' "${QBITTORRENT_CONFIG_DIR:-}"
+      printf 'PLEX_CONFIG_DIR=%q\n' "${PLEX_CONFIG_DIR}"
     } > "${tmp_state}"
     mv "${tmp_state}" "${STATE_FILE}"
     chmod 600 "${STATE_FILE}"

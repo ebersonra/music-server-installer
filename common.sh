@@ -822,6 +822,11 @@ save_state() {
     printf 'INSTALL_PROWLARR=%q\n' "${INSTALL_PROWLARR}"
     printf 'INSTALL_QBITTORRENT=%q\n' "${INSTALL_QBITTORRENT}"
     printf 'INSTALL_FLARESOLVERR=%q\n' "${INSTALL_FLARESOLVERR:-false}"
+    printf 'DEPLOY_MODE=%q\n' "${DEPLOY_MODE:-docker}"
+    printf 'LIDARR_CONFIG_DIR=%q\n' "${LIDARR_CONFIG_DIR}"
+    printf 'PROWLARR_CONFIG_DIR=%q\n' "${PROWLARR_CONFIG_DIR}"
+    printf 'QBITTORRENT_CONFIG_DIR=%q\n' "${QBITTORRENT_CONFIG_DIR:-}"
+    printf 'PLEX_CONFIG_DIR=%q\n' "${PLEX_CONFIG_DIR}"
   } > "${STATE_FILE}"
   chmod 600 "${STATE_FILE}"
   log_ok "Estado salvo em ${STATE_FILE}"
@@ -840,7 +845,14 @@ load_state() {
   PHOTOS_ROOT="${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}"
   PLEX_PHOTOS_LIBRARY_NAME="${PLEX_PHOTOS_LIBRARY_NAME:-Fotos}"
   INSTALL_FLARESOLVERR="${INSTALL_FLARESOLVERR:-false}"
-  QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
+  DEPLOY_MODE="${DEPLOY_MODE:-docker}"
+  if [[ -z "${QBITTORRENT_CONFIG_DIR:-}" ]]; then
+    if [[ "${DEPLOY_MODE}" == "docker" && -d "${TARGET_HOME}/.config/qBittorrent" ]]; then
+      QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config"
+    else
+      QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
+    fi
+  fi
   return 0
 }
 
@@ -932,7 +944,7 @@ print_final_urls() {
     if [[ -f "${STATE_DIR}/qbittorrent-temp-password.txt" ]]; then
       echo -e "${C_DIM}Usuário: admin · Senha temporária: $(cat "${STATE_DIR}/qbittorrent-temp-password.txt")${C_RESET}"
     else
-      echo -e "${C_DIM}Usuário: admin · Senha: ver journalctl -u qbittorrent-nox@${TARGET_USER}${C_RESET}"
+      echo -e "${C_DIM}Usuário: admin · Senha: docker logs music-qbittorrent 2>&1 | grep -i password${C_RESET}"
     fi
     echo
   fi
@@ -947,6 +959,7 @@ print_final_urls() {
   echo -e "${C_DIM}Biblioteca: ${MUSIC_ROOT}${C_RESET}"
   echo -e "${C_DIM}Fotos:      ${PHOTOS_ROOT:-${MOUNT_POINT}/Fotos}${C_RESET}"
   echo -e "${C_DIM}Estado:     ${STATE_FILE}${C_RESET}"
-  echo -e "${C_DIM}Wiring:     sudo ./setup-media-stack.sh  (ou msi-setup-media)${C_RESET}"
+  echo -e "${C_DIM}Wiring:     sudo msi-setup-media  (ou ./setup-media-stack.sh)${C_RESET}"
+  echo -e "${C_DIM}Status:     docker compose ps${C_RESET}"
   echo
 }

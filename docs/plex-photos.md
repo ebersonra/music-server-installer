@@ -1,6 +1,14 @@
 # Fotos no Plex (HD externo)
 
-Mesmo fluxo das músicas: pastas no HD montado + biblioteca no Plex. Sem Docker.
+Mesmo fluxo das músicas: pastas no HD montado + biblioteca no Plex.  
+O container `music-plex` usa **`network_mode: host`** e monta `/media/music` (somente leitura) — ver [docker.md](docker.md).
+
+Instalação / migração:
+
+```bash
+sudo msi-install                 # instalação nova (Docker Compose)
+sudo msi-migrate-docker -y       # se ainda estava em systemd
+```
 
 Paths reais:
 

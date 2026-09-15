@@ -25,6 +25,7 @@ declare -A COMMANDS=(
   ["${PREFIX}-mount"]="mount.sh"
   ["${PREFIX}-update"]="update.sh"
   ["${PREFIX}-uninstall"]="uninstall.sh"
+  ["${PREFIX}-migrate-docker"]="migrate-to-docker.sh"
   ["${PREFIX}-setup-media"]="setup-media-stack.sh"
   ["${PREFIX}-setup-cloud-backup"]="setup-cloud-backup.sh"
   ["${PREFIX}-backup-cloud"]="backup-cloud.sh"
@@ -53,8 +54,11 @@ Opções:
 
 Exemplos após instalar:
   sudo ${PREFIX}-mount
+  sudo ${PREFIX}-migrate-docker -y
+  sudo ${PREFIX}-setup-media
   sudo ${PREFIX}-backup-cloud --dry-run
   sudo ${PREFIX}-setup-security
+  ${PREFIX}-link-global --list
 EOF
 }
 
@@ -76,6 +80,7 @@ parse_args() {
           ["${PREFIX}-mount"]="mount.sh"
           ["${PREFIX}-update"]="update.sh"
           ["${PREFIX}-uninstall"]="uninstall.sh"
+          ["${PREFIX}-migrate-docker"]="migrate-to-docker.sh"
           ["${PREFIX}-setup-media"]="setup-media-stack.sh"
           ["${PREFIX}-setup-cloud-backup"]="setup-cloud-backup.sh"
           ["${PREFIX}-backup-cloud"]="backup-cloud.sh"

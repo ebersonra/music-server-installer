@@ -27,7 +27,7 @@ Celular (DCIM, WhatsApp, …)
 
 ## Pré-requisitos
 
-1. Servidor instalado com `sudo ./install.sh` (pastas de fotos + OpenSSH).
+1. Servidor instalado com `sudo msi-install` / `sudo ./install.sh` (pastas de fotos + OpenSSH; Plex em Docker).
 2. Celular e notebook na **mesma Wi‑Fi**.
 3. App **FolderSync** (ou FolderSync Pro) na Play Store.
 4. IP do servidor — no notebook:
@@ -190,7 +190,13 @@ No Plex (`http://IP:32400/web`):
 - Teste: `ssh usuario@IP` de outro PC
 
 **Pasta remota não existe**  
-- Rode `sudo ./mount.sh` se o HD desmontou  
+- Rode `sudo msi-mount` se o HD desmontou
+- Se o Plex não listar fotos novas:
+  ```bash
+  cd /caminho/do/music-server-installer
+  docker compose restart plex
+  ```
+- App Plex no celular *offline*: [docker.md § Plex e app mobile](docker.md#plex-e-app-mobile)
 - Confira: `ls /media/music/Fotos`
 
 **Sync ok, Plex vazio**  

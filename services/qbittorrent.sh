@@ -1,186 +1,81 @@
 #!/usr/bin/env bash
-# services/qbittorrent.sh — Instalação e configuração do qBittorrent-nox
+# services/qbittorrent.sh — qBittorrent via Docker Compose (ADR-0001)
 # shellcheck disable=SC2154
+
+# shellcheck source=services/docker.sh
+source "${INSTALLER_ROOT}/services/docker.sh"
 
 _qbit_apply_excluded_file_names() {
   local conf="$1"
-  local names="${QBIT_EXCLUDED_FILE_NAMES:-}"
-  [[ -n "${names}" ]] || return 0
+  local names="${QBIT_EXCLUDED_FILE_NAMES}"
   [[ -f "${conf}" ]] || return 0
-
-  # Garantir seção [BitTorrent]
-  if ! grep -q '^\[BitTorrent\]' "${conf}"; then
-    printf '\n[BitTorrent]\n' >> "${conf}"
-  fi
-
-  if grep -q 'Session\\ExcludedFileNamesEnabled=' "${conf}"; then
-    sed -i 's|Session\\ExcludedFileNamesEnabled=.*|Session\\ExcludedFileNamesEnabled=true|' "${conf}"
+  if grep -q '^Session\\ExcludedFileNames=' "${conf}" 2>/dev/null; then
+    sed -i "s|^Session\\\\ExcludedFileNames=.*|Session\\\\ExcludedFileNames=${names}|" "${conf}"
   else
-    sed -i '/^\[BitTorrent\]/a Session\\ExcludedFileNamesEnabled=true' "${conf}"
-  fi
-
-  if grep -q 'Session\\ExcludedFileNames=' "${conf}"; then
-    local escaped
-    escaped="$(printf '%s' "${names}" | sed -e 's/[&|]/\\&/g')"
-    sed -i "s|Session\\\\ExcludedFileNames=.*|Session\\\\ExcludedFileNames=${escaped}|" "${conf}"
-  else
-    # Inserir linha após ExcludedFileNamesEnabled (ou após [BitTorrent])
-    if grep -q 'Session\\ExcludedFileNamesEnabled=' "${conf}"; then
-      sed -i "/Session\\\\ExcludedFileNamesEnabled=/a Session\\\\ExcludedFileNames=${names}" "${conf}"
-    else
-      sed -i "/^\[BitTorrent\]/a Session\\\\ExcludedFileNames=${names}" "${conf}"
+    # Seção BitTorrent
+    if grep -q '^\[BitTorrent\]' "${conf}"; then
+      sed -i "/^\[BitTorrent\]/a Session\\\\ExcludedFileNamesEnabled=true\nSession\\\\ExcludedFileNames=${names}" "${conf}"
     fi
+  fi
+  if ! grep -q 'ExcludedFileNamesEnabled=true' "${conf}"; then
+    sed -i 's|^Session\\ExcludedFileNamesEnabled=.*|Session\\ExcludedFileNamesEnabled=true|' "${conf}" || true
   fi
 }
 
-install_qbittorrent() {
-  log_step "Instalando qBittorrent"
-  export DEBIAN_FRONTEND=noninteractive
-
-  apt-get install -y -qq qbittorrent-nox
-
-  # Config do usuário alvo
-  QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
-  mkdir -p "${QBITTORRENT_CONFIG_DIR}"
-
-  local conf="${QBITTORRENT_CONFIG_DIR}/qBittorrent.conf"
-  local template="${INSTALLER_ROOT}/templates/qbittorrent.conf"
-  local excluded="${QBIT_EXCLUDED_FILE_NAMES:-}"
-
+_seed_qbittorrent_config() {
+  local conf_dir="${QBITTORRENT_CONFIG_DIR}/qBittorrent"
+  local conf="${conf_dir}/qBittorrent.conf"
+  mkdir -p "${conf_dir}"
   if [[ ! -f "${conf}" ]]; then
-    if [[ -f "${template}" ]]; then
+    local tmpl="${INSTALLER_ROOT}/templates/qbittorrent.conf"
+    if [[ -f "${tmpl}" ]]; then
       sed -e "s|__DOWNLOADS_DIR__|${DOWNLOADS_DIR}|g" \
           -e "s|__INCOMPLETE_DIR__|${INCOMPLETE_DIR}|g" \
           -e "s|__PORT__|${PORT_QBITTORRENT}|g" \
-          -e "s|__MUSIC_ROOT__|${MUSIC_ROOT}|g" \
-          -e "s|__EXCLUDED_FILE_NAMES__|${excluded}|g" \
-          "${template}" > "${conf}"
-    else
-      cat > "${conf}" <<EOF
-[LegalNotice]
-Accepted=true
-
-[BitTorrent]
-Session\\ExcludedFileNamesEnabled=true
-Session\\ExcludedFileNames=${excluded}
-
-[Preferences]
-Connection\\PortRangeMin=6881
-Downloads\\SavePath=${DOWNLOADS_DIR}
-Downloads\\TempPath=${INCOMPLETE_DIR}
-Downloads\\TempPathEnabled=true
-WebUI\\Enabled=true
-WebUI\\Address=*
-WebUI\\Port=${PORT_QBITTORRENT}
-WebUI\\LocalHostAuth=false
-WebUI\\Username=admin
-General\\Locale=pt_BR
-EOF
+          -e "s|__EXCLUDED_FILE_NAMES__|${QBIT_EXCLUDED_FILE_NAMES}|g" \
+          "${tmpl}" > "${conf}"
     fi
   else
-    # Atualizar paths sem destruir outras preferências
-    if grep -q 'Downloads\\SavePath=' "${conf}"; then
-      sed -i "s|Downloads\\\\SavePath=.*|Downloads\\\\SavePath=${DOWNLOADS_DIR}|" "${conf}"
-    fi
-    if grep -q 'Downloads\\TempPath=' "${conf}"; then
-      sed -i "s|Downloads\\\\TempPath=.*|Downloads\\\\TempPath=${INCOMPLETE_DIR}|" "${conf}"
-    fi
     _qbit_apply_excluded_file_names "${conf}"
   fi
+  chown -R "${TARGET_UID}:${TARGET_GID}" "${QBITTORRENT_CONFIG_DIR}" 2>/dev/null || true
+}
 
-  chown -R "${TARGET_UID}:${TARGET_GID}" "${TARGET_HOME}/.config"
-  chmod 600 "${conf}" 2>/dev/null || true
+install_qbittorrent() {
+  log_step "Instalando qBittorrent (Docker)"
+  ensure_docker
+  write_compose_env
+  _seed_qbittorrent_config
 
-  # Unit systemd para o usuário
-  local unit_src="${INSTALLER_ROOT}/templates/systemd/qbittorrent-nox.service"
+  # Units nativas (template @user e instâncias)
+  _stop_native_unit "qbittorrent-nox@${TARGET_USER}"
+  _stop_native_unit qbittorrent-nox
+  systemctl disable "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
+  fuser -k "${PORT_QBITTORRENT}/tcp" 2>/dev/null || true
 
-  if [[ -f "${unit_src}" ]]; then
-    cp "${unit_src}" /etc/systemd/system/qbittorrent-nox@.service
-  else
-    cat > /etc/systemd/system/qbittorrent-nox@.service <<'EOF'
-[Unit]
-Description=qBittorrent-nox service for %i
-After=network.target
-
-[Service]
-Type=simple
-User=%i
-Group=%i
-ExecStart=/usr/bin/qbittorrent-nox
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  fi
-
-  mkdir -p "${DOWNLOADS_DIR}" "${INCOMPLETE_DIR}"
-  case "${DISK_FSTYPE:-}" in
-    ntfs|ntfs3|fuseblk|vfat|exfat)
-      log_info "Pulando chown em ${MUSIC_ROOT} (filesystem ${DISK_FSTYPE})"
-      ;;
-    *)
-      chown -R "${TARGET_UID}:${TARGET_GID}" "${MUSIC_ROOT}" 2>/dev/null \
-        || log_warn "chown em ${MUSIC_ROOT} falhou"
-      ;;
-  esac
-
-  systemctl daemon-reload
-  systemctl enable "qbittorrent-nox@${TARGET_USER}" >/dev/null 2>&1 || true
-  systemctl restart "qbittorrent-nox@${TARGET_USER}"
-
-  if systemctl is-active --quiet "qbittorrent-nox@${TARGET_USER}"; then
-    log_ok "qBittorrent ativo (WebUI porta ${PORT_QBITTORRENT})"
-    wait_for_port "${PORT_QBITTORRENT}" 30 || log_warn "WebUI ainda não escuta na porta ${PORT_QBITTORRENT}"
-    local tmp_pass
-    tmp_pass="$(journalctl -u "qbittorrent-nox@${TARGET_USER}" -n 80 --no-pager 2>/dev/null \
-      | sed -n 's/.*temporary password as[: ]*//Ip;s/.*temporary password is[: ]*//Ip' \
-      | awk '{print $1}' | tail -1 || true)"
-    if [[ -n "${tmp_pass}" ]]; then
-      log_info "Senha temporária do WebUI: ${tmp_pass} (usuário: admin)"
-      mkdir -p "${STATE_DIR}"
-      echo "${tmp_pass}" > "${STATE_DIR}/qbittorrent-temp-password.txt"
-      chmod 600 "${STATE_DIR}/qbittorrent-temp-password.txt"
-    else
-      log_info "Login WebUI: admin — se a senha padrão não funcionar, veja: journalctl -u qbittorrent-nox@${TARGET_USER}"
-    fi
-    log_info "Exclusões de arquivo perigosas (Windows+Unix) aplicadas no qBittorrent"
-  else
-    log_warn "qBittorrent pode não ter iniciado — verifique: systemctl status qbittorrent-nox@${TARGET_USER}"
-  fi
-
-  log_ok "qBittorrent instalado"
+  compose_up_service qbittorrent
+  wait_compose_healthy qbittorrent "${PORT_QBITTORRENT}" 90 || return 1
+  validate_http "qBittorrent" "http://127.0.0.1:${PORT_QBITTORRENT}/" || return 1
+  log_ok "qBittorrent ativo (Docker) na porta ${PORT_QBITTORRENT}"
+  log_info "Senha WebUI: veja 'docker logs music-qbittorrent' no primeiro start (LinuxServer)"
 }
 
 update_qbittorrent() {
-  log_step "Atualizando qBittorrent"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq --only-upgrade qbittorrent-nox || log_warn "Sem atualização do qBittorrent"
-  if [[ -n "${TARGET_USER:-}" && -n "${TARGET_HOME:-}" ]]; then
-    QBITTORRENT_CONFIG_DIR="${TARGET_HOME}/.config/qBittorrent"
-    local conf="${QBITTORRENT_CONFIG_DIR}/qBittorrent.conf"
-    if [[ -f "${conf}" ]]; then
-      _qbit_apply_excluded_file_names "${conf}"
-      chown "${TARGET_UID}:${TARGET_GID}" "${conf}" 2>/dev/null || true
-    fi
-    systemctl restart "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
-  fi
+  log_step "Atualizando qBittorrent (imagem estável)"
+  ensure_docker
+  write_compose_env
+  _seed_qbittorrent_config
+  compose_update_services qbittorrent
+  wait_compose_healthy qbittorrent "${PORT_QBITTORRENT}" 90 || return 1
   log_ok "qBittorrent atualizado"
 }
 
 uninstall_qbittorrent() {
-  log_step "Removendo qBittorrent"
-  if [[ -n "${TARGET_USER:-}" ]]; then
-    systemctl stop "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
-    systemctl disable "qbittorrent-nox@${TARGET_USER}" 2>/dev/null || true
-  fi
-  systemctl stop 'qbittorrent-nox@*' 2>/dev/null || true
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get remove -y -qq qbittorrent-nox 2>/dev/null || true
+  log_step "Removendo qBittorrent (Docker)"
+  compose_down_service qbittorrent
+  _stop_native_unit "qbittorrent-nox@${TARGET_USER:-}"
+  _stop_native_unit qbittorrent-nox
   rm -f /etc/systemd/system/qbittorrent-nox@.service
-  systemctl daemon-reload
-  log_warn "Config em ${QBITTORRENT_CONFIG_DIR:-~/.config/qBittorrent} preservada."
+  systemctl daemon-reload 2>/dev/null || true
   log_ok "qBittorrent removido"
 }
