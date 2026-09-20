@@ -3,7 +3,7 @@
 # shellcheck disable=SC2034
 
 # Versão do instalador
-INSTALLER_VERSION="1.2.0"
+INSTALLER_VERSION="1.2.2"
 INSTALLER_NAME="Music Server Installer"
 
 # Runtime dos serviços de mídia (ADR-0001)

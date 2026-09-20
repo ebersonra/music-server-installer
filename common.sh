@@ -517,9 +517,8 @@ _apply_selected_disk() {
     fi
   fi
 
-  if [[ "${MOUNT_POINT}" == /media/* ]]; then
-    MANAGE_FSTAB=false
-  fi
+  # /media/*: fstab é seguro após regra UDISKS_AUTO=0 (configure_ntfs_mount).
+  # Só desativa fstab quando o usuário opta por reutilizar o mount do desktop acima.
 
   MUSIC_ROOT="${MOUNT_POINT}/Musicas"
   log_ok "Disco selecionado: ${DISK_LABEL} (${DISK_DEVICE}, ${DISK_FSTYPE}, ${DISK_SIZE})"
